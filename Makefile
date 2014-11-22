@@ -5,7 +5,7 @@
 # Learning track project
 
 CC      = gcc
-CFLAGS  = -Wall -pedantic -O0
+CFLAGS  = -Wall -pedantic -ggdb -std=c99 -O0
 LDLIBS  =
 TARGETS = dir prog
 OBJECTS = ./src/bin/ddos_detection.o

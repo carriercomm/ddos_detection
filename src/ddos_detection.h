@@ -49,6 +49,103 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <getopt.h>
+#include <netinet/in.h>
+
+/*!
+ * \name Default values
+ * Defines macros used by p2p botnet detector.
+ * \{ */
+#define NUMBER_LEN 5 /*< Maximal length of number for buffer. */
+#define PADDING 16 /*< Padding width for log files. */
+
+#define PROTOCOL_TCP 6 /*< TCP protocol number. */
+#define PROTOCOL_UDP 17 /*< UDP protocol number. */
+
+#define BUFFER_TMP 256 /*< Size of a temporary buffer. */
+
+#define HOSTS_INIT 32768 /*< Init size of array with hosts. */
+
+#define BITS_IP4 32 /*< Number of bits in IPv4 address. */
+#define MASK_IP4 0x80000000 /*< Mask number for 32 bit address. */
+
+#define INTERVAL 60 /*< Default observation interval of SYN packets in seconds. */
+#define TIME_WINDOW 3600 /*< Default observation time window defined in seconds. */
+
+#define DELIMITER " " /*< Default delimiter for parsing CSV files. */
+#define OPTIONS "d:f:hHL:p:t:w:" /*< Options for for command line. */
+/*! \} */
+
+/*!
+ * \brief Mode enumeration.
+ * Mode type of the DDoS detection.
+ */
+enum mode {
+   MODE_SYN_FLOODING = 1, /*!< SYN flooding detection mode. */
+   HOST_PORTSCAN_VER = 2, /*!< Portscan detection mode. */
+   HOST_PORTSCAN_HOR = 3, /*!< Portscan detection mode. */
+};
+
+/*!
+ * \brief Binary tree structure.
+ * Structure containing pointers to left and right whether the bit
+ * is 0 or 1, leafs also contains pointer to host structure.
+ */
+typedef struct node_t {
+   struct node_t *left; /*!< Pointer to another node if result is 1. */
+   struct node_t *right; /*!< Pointer to another node if result is 0. */
+   void *host; /*!< Pointer to host strcuture if node is a leaf. */
+} node_t;
+
+/*!
+ * \brief Parameters structure
+ * Structure of parameters containing default or set parameters during initialization
+ * of module to be used in following functions.
+ */
+typedef struct params_t {
+   int mode; /*!< Flag which type od DDoS detection mode should be used. */
+   int progress; /*!< Parameter for printing dots of received flows. */
+   int level; /*!< Verbosity level for printing graph structure. */
+   int interval; /*!< Observation interval of SYN packets in seconds. */
+   int time_window; /*!< Observation time window in seconds. */
+   char *file; /*!< CSV file to be processed by the algorithm. */
+} params_t;
+
+/*!
+ * \brief Local host structure.
+ * Structure containing information about local host such as IP address and other
+ * peers with whom was communicating during the given time period. It also contains
+ * information about mutual contacts with other local hosts.
+ */
+typedef struct host_t {\
+   in_addr_t ip; /*!< IP address of the local host. */
+   uint8_t stat; /*!< Host status for further examination. */
+   uint32_t *syn_packets; /*!< Array of mutual contacts with same index as the pointers of the edges. */
+} host_t;
+
+/*!
+ * \brief Graph structure.
+ * Structure containing pointers to allocated nodes and hosts in graph scheme
+ * to be further examined.
+ */
+typedef struct graph_t {
+   uint64_t hosts_cnt; /*!< Number of hosts determined by destination IP address in graph. */
+   uint64_t hosts_max; /*!< Maximum number of hosts in graph. */
+   struct node_t *root; /*!< Pointer to root of binary tree with all local IPv4 addresses. */
+   struct host_t **hosts; /*!< Pointer to array of hosts. */
+} graph_t;
+
+/*!
+ * \brief Parameters initialization.
+ * Function to initialize parameters with default values and parse parameters
+ * given in command line.
+ * \param[in] argc Number of given parameters.
+ * \param[in] argv Array of given parameters.
+ * \return Pointer to allocated structure with initialized parameters.
+ */
+params_t *params_init(int argc, char **argv);
 
 /*!
  * \brief Main function.
