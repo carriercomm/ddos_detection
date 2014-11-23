@@ -35,5 +35,6 @@ clean:
 	rm -rf ./doc
 	rm -rf ./img
 	rm -rf ./src/bin
+	rm -f ./res/*
 	rm -f $(EXE)
 

@@ -44,6 +44,8 @@
  *
  */
 
+#include <netdb.h>
+
 #include "ddos_detection.h"
 
 int array_max; /*!< Global maximum size of SYN packets array. */
@@ -58,7 +60,9 @@ params_t *params_init(int argc, char **argv)
       "Module for detecting and analyzing potential DDoS attacks in computer networks.\n"
       "Special parameters:\n"
       "  -d NUM       Set the mode of DDoS detection, SYN flooding by default.\n"
+      "  -e NUM       Set the number of iterations to flush the graph, 0 by default.\n"
       "  -f PATH      Set the path of CSV file to be examined.\n"
+      "  -k NUM       Set the number of clusters used by k-means algorithm, 2 by default.\n"
       "  -L LEVEL     Print graphs based on given verbosity level, range 1 to 5.\n"
       "  -p NUM       Show progress - print a dot every N flows.\n"
       "  -t TIME      Set the observation time window in seconds, 1 minute by default.\n"
@@ -76,8 +80,12 @@ params_t *params_init(int argc, char **argv)
    }
 
    params->mode = MODE_SYN_FLOODING;
+   params->clusters = CLUSTERS;
+   params->file_cnt = 1;
+   params->flush_cnt = 1;
+   params->flush_iter = FLUSH_ITER;
    params->progress = 0;
-   params->level = 0;
+   params->level = VERBOSITY;
    params->interval = INTERVAL;
    params->time_window = TIME_WINDOW;
    params->file = NULL;
@@ -92,6 +100,12 @@ params_t *params_init(int argc, char **argv)
               goto error;
             }
             break;
+         case 'e':
+            if (strlen(optarg) > NUMBER_LEN || sscanf(optarg, "%d%s", &params->flush_iter, tmp) != 1 || params->flush_iter < 0) {
+              fprintf(stderr, "Error: Invalid flush iteration number.\n");
+              goto error;
+            }
+            break;
          case 'f':
             params->file = optarg;
             break;
@@ -101,6 +115,11 @@ params_t *params_init(int argc, char **argv)
          case 'H':
             fprintf(stderr, "%s\n", description);
             break;
+         case 'k':
+            if (strlen(optarg) > 1 || sscanf(optarg, "%d%s", &params->clusters, tmp) != 1 || params->clusters < CLUSTERS || params->clusters > NUMBER_LEN) {
+              fprintf(stderr, "Error: Invalid number of clusters to be used in k-means algorithm.\n");
+              goto error;
+            }
          case 'L':
             if (strlen(optarg) > 1 || sscanf(optarg, "%d%s", &params->level, tmp) != 1 || params->level < 0 || params->level > NUMBER_LEN) {
               fprintf(stderr, "Error: Invalid verbosity level.\n");
@@ -147,6 +166,136 @@ params_t *params_init(int argc, char **argv)
          free(params);
       }
       return NULL;
+}
+
+int compare_hosts(const void *elem1, const void *elem2)
+{
+   host_t *host1, *host2;
+
+   host1 = *(host_t * const *)elem1;
+   host2 = *(host_t * const *)elem2;
+   return (host2->accesses - host1->accesses);
+}
+
+char *get_token(char **string, int *len)
+{
+   int i;
+   char *tmp;
+
+   tmp = *string;
+   for (i = 0; i < *len; i ++) {
+
+      if (tmp[i] == DELIMITER) {
+         tmp[i] = 0;
+         *string += i + 1;
+         *len -= i + 1;
+         if (i == 0) {
+            return NULL;
+         } else {
+            return tmp;
+         }
+      }
+   }
+   *len -= i;
+   return tmp;
+}
+
+int parse_line(graph_t *graph, flow_t *flow, char *line, int len)
+{
+   char *bytes, *dst_ip, *dst_port, *packets, *protocol, *src_ip, *src_port, *syn_flag, *time_first, *time_last;
+
+   // Retrieving tokens.
+   dst_ip = get_token(&line, &len);
+   if (dst_ip == NULL) {
+      fprintf(stderr, "Warning: Missing destination IP address, parsing interrupted.\n");
+      return EXIT_FAILURE;
+   }
+   if (inet_pton(AF_INET, dst_ip, &(flow->dst_ip)) != 1) {
+         fprintf(stderr, "Warning: Cannot convert string to destination IP address, parsing interrupted.\n");
+         return EXIT_FAILURE;
+   }
+
+   src_ip = get_token(&line, &len);
+   if (src_ip == NULL) {
+      fprintf(stderr, "Warning: Missing source IP address, parsing interrupted.\n");
+      return EXIT_FAILURE;
+   }
+   if (inet_pton(AF_INET, src_ip, &(flow->src_ip)) != 1) {
+         fprintf(stderr, "Warning: Cannot convert string to source IP address, parsing interrupted.\n");
+         return EXIT_FAILURE;
+   }
+
+   dst_port = get_token(&line, &len);
+   if (dst_port == NULL) {
+      fprintf(stderr, "Warning: Missing destination port, parsing interrupted.\n");
+      return EXIT_FAILURE;
+   }
+   flow->dst_port = atoi(dst_port);
+
+   src_port = get_token(&line, &len);
+   if (src_port == NULL) {
+      fprintf(stderr, "Warning: Missing source port, parsing interrupted.\n");
+      return EXIT_FAILURE;
+   }
+   flow->src_port = atoi(src_port);
+
+   protocol = get_token(&line, &len);
+   if (protocol == NULL) {
+      fprintf(stderr, "Warning: Missing used protocol, parsing interrupted.\n");
+      return EXIT_FAILURE;
+   }
+   flow->protocol = atoi(protocol);
+
+   time_first = get_token(&line, &len);
+   if (time_first == NULL) {
+      fprintf(stderr, "Warning: Missing time of the first packet, parsing interrupted.\n");
+      return EXIT_FAILURE;
+   }
+   flow->time_first = atoi(time_first);
+
+   // Unknown field, skipping token.
+   get_token(&line, &len);
+
+   time_last = get_token(&line, &len);
+   if (time_last == NULL) {
+      fprintf(stderr, "Warning: Missing time of the last packet, parsing interrupted.\n");
+      return EXIT_FAILURE;
+   }
+   flow->time_last = atoi(time_last);
+
+   bytes = get_token(&line, &len);
+   if (bytes == NULL) {
+      fprintf(stderr, "Warning: Missing number of transmitted bytes, parsing interrupted.\n");
+      return EXIT_FAILURE;
+   }
+   flow->bytes = atoi(bytes);
+
+   packets = get_token(&line, &len);
+   if (packets == NULL) {
+      fprintf(stderr, "Warning: Missing number of transmitted packets, parsing interrupted.\n");
+      return EXIT_FAILURE;
+   }
+   flow->packets = atoi(packets);
+
+   syn_flag = get_token(&line, &len);
+   if (syn_flag == NULL) {
+      fprintf(stderr, "Warning: Missing SYN flag, parsing interrupted.\n");
+      return EXIT_FAILURE;
+   }
+   flow->syn_flag = atoi(syn_flag);
+
+   if (graph->time_first == 0) {
+      graph->time_first = flow->time_first;
+      graph->time_last = flow->time_first + graph->params->time_window;
+   }
+
+   // Delayed flow record, skipping line.
+   if (flow->time_first < graph->time_first) {
+      fprintf(stderr, "Warning: Delayed flow record, parsing interrupted.\n");
+      return EXIT_FAILURE;
+   }
+
+   return EXIT_SUCCESS;
 }
 
 node_t *create_node(in_addr_t ip, node_t *root)
@@ -273,17 +422,135 @@ host_t *create_host(in_addr_t ip, int mode)
        return NULL;
    }
    host->ip = ip;
-   host->stat = 0;
+   host->stat = 1;
+   host->accesses = 1;
    host->intervals = NULL;
 
    if (mode == MODE_SYN_FLOODING) {
-      host->intervals = (intvl_t *) calloc(array_max, sizeof(intvl_t));
+      host->intervals = (intvl_t *) calloc(array_max + 1, sizeof(intvl_t));
       if (host->intervals == NULL) {
           fprintf(stderr, "Error: Not enough memory for  host structure.\n");
           return NULL;
       }
    }
    return host;
+}
+
+host_t **add_host(host_t **hosts, host_t *host, uint64_t *hosts_cnt, uint64_t *hosts_max)
+{
+   // Reallocating array if needed.
+   if (*hosts_cnt == *hosts_max) {
+      *hosts_max *= 2;
+      if (*hosts_max == 0) {
+         fprintf(stderr, "Warning: Too many hosts in graph, next time it might overflow.\n");
+         *hosts_max -= 1;
+      }
+      host_t **tmp = (host_t **) realloc(hosts, (*hosts_max) * sizeof(host_t *));
+      if (tmp == NULL) {
+         fprintf(stderr, "Error: Not enough memory for hosts array.\n");
+         free(hosts);
+         return NULL;
+      }
+      hosts = tmp;
+   }
+
+   // Adding new host to array of hosts and updating counter.
+   hosts[(*hosts_cnt)++] = host;
+   return hosts;
+}
+
+graph_t *get_host(graph_t *graph, flow_t *flow)
+{
+   int cnt, first, i, last, seconds;
+   float pps;
+   time_t diff;
+   node_t *node;
+   host_t *host;
+
+   if (graph->params->mode == MODE_SYN_FLOODING && flow->syn_flag != 1) {
+      // SYN flag is not set, skipping line.
+      return graph;
+   }
+
+   // Finding host with destination IP address.
+   node = create_node(flow->dst_ip, graph->root);
+
+   // Creating new host with destination address if not present.
+   if (node->host == NULL) {
+      host = create_host(flow->dst_ip, graph->params->mode);
+      if (host == NULL) {
+         goto error;
+      }
+      node->host = host;
+      graph->hosts = add_host(graph->hosts, host, &(graph->hosts_cnt), &(graph->hosts_max));
+      if (graph->hosts == NULL) {
+         goto error;
+      }
+   } else {
+      host = (host_t *) node->host;
+      host->stat = 1;
+      host->accesses ++;
+   }
+
+   if (graph->params->mode == MODE_SYN_FLOODING) {
+      // Getting indexes of the interval array.
+      first = ((graph->params->time_window + (flow->time_first - graph->time_first)) / graph->params->interval) - graph->params->interval;
+      last = ((graph->params->time_window + (flow->time_last - graph->time_first)) / graph->params->interval) - graph->params->interval;
+
+      // Adding all SYN packets in the same interval.
+      if (first == last) {
+         host->intervals[first].syn_packets += flow->packets;
+      }
+
+      // Distributing SYN packets among various intervals using linear function.
+      else {
+         diff = flow->time_last - flow->time_first;
+         cnt = last - first;
+         pps = ((float) flow->packets) / ((float) diff);
+
+         // Calculating the seconds residue of the first interval.
+         seconds = ((first + 1) * graph->params->interval) - (flow->time_first - graph->time_first);
+         host->intervals[first].syn_packets += (seconds * pps);
+
+         // Time window reached, distributing the residue for next iteration.
+         if (flow->time_last >= graph->time_last) {
+            host->intervals[array_max].syn_packets += ((diff - seconds) * pps);
+            return graph;
+         }
+
+         if (cnt > 2) {
+           for (i = 0; i < cnt - 2; i ++) {
+              host->intervals[first+i+1].syn_packets += (graph->params->interval * pps);
+           }
+         }
+
+         // Calculating the seconds residue of the first interval.
+         seconds = (flow->time_last - graph->time_first) - (last * graph->params->interval);
+         host->intervals[last].syn_packets += (seconds * pps);
+      }
+
+      return graph;
+   }
+
+   // TODO Complete other modes of detection.
+   else if (graph->params->mode == MODE_PORTSCAN_VER) {
+      fprintf(stderr, "To be completed.\n");
+
+      return graph;
+   }
+
+   else {
+      fprintf(stderr, "To be completed.\n");
+
+      return graph;
+   }
+
+   // Cleaning up after error.
+   error:
+      if (graph != NULL) {
+         free_graph(graph);
+      }
+      return NULL;
 }
 
 graph_t *create_graph(params_t *params)
@@ -297,6 +564,7 @@ graph_t *create_graph(params_t *params)
    }
 
    // Initializing structure.
+   graph->time_first = graph->time_last = 0;
    graph->hosts_cnt = 0;
    graph->hosts_max = HOSTS_INIT;
    graph->params = params;
@@ -336,208 +604,169 @@ void free_graph(graph_t *graph)
    }
 }
 
-char *get_token(char **string, int *len)
+void reset_graph(graph_t *graph)
 {
-   int i;
-   char *tmp;
-
-   tmp = *string;
-   for (i = 0; i < *len; i ++) {
-
-      if (tmp[i] == DELIMITER) {
-         tmp[i] = 0;
-         *string += i + 1;
-         *len -= i + 1;
-         if (i == 0) {
-            return NULL;
-         } else {
-            return tmp;
-         }
-      }
-   }
-   *len -= i;
-   return tmp;
-}
-
-int parse_line(graph_t *graph, flow_t *flow, char *line, int len)
-{
-   char *bytes, *dst_ip, *dst_port, *packets, *protocol, *src_ip, *src_port, *syn_flag, *time_first, *time_last;
-
-   // Retrieving tokens.
-   dst_ip = get_token(&line, &len);
-   if (dst_ip == NULL) {
-      fprintf(stderr, "Warning: Missing destination IP address, parsing interrupted.\n");
-      return EXIT_FAILURE;
-   }
-   if (inet_pton(AF_INET, dst_ip, &(flow->dst_ip)) != 1) {
-         fprintf(stderr, "Warning: Cannot convert string to destination IP address, parsing interrupted.\n");
-         return EXIT_FAILURE;
-   }
-
-   src_ip = get_token(&line, &len);
-   if (src_ip == NULL) {
-      fprintf(stderr, "Warning: Missing source IP address, parsing interrupted.\n");
-      return EXIT_FAILURE;
-   }
-   if (inet_pton(AF_INET, src_ip, &(flow->src_ip)) != 1) {
-         fprintf(stderr, "Warning: Cannot convert string to source IP address, parsing interrupted.\n");
-         return EXIT_FAILURE;
-   }
-
-   dst_port = get_token(&line, &len);
-   if (dst_port == NULL) {
-      fprintf(stderr, "Warning: Missing destination port, parsing interrupted.\n");
-      return EXIT_FAILURE;
-   }
-   flow->dst_port = atoi(dst_port);
-
-   src_port = get_token(&line, &len);
-   if (src_port == NULL) {
-      fprintf(stderr, "Warning: Missing source port, parsing interrupted.\n");
-      return EXIT_FAILURE;
-   }
-   flow->src_port = atoi(src_port);
-
-   protocol = get_token(&line, &len);
-   if (protocol == NULL) {
-      fprintf(stderr, "Warning: Missing used protocol, parsing interrupted.\n");
-      return EXIT_FAILURE;
-   }
-   flow->protocol = atoi(protocol);
-
-   time_first = get_token(&line, &len);
-   if (time_first == NULL) {
-      fprintf(stderr, "Warning: Missing time of the first packet, parsing interrupted.\n");
-      return EXIT_FAILURE;
-   }
-   flow->time_first = atoi(time_first);
-
-   // Unknown field, skipping token.
-   get_token(&line, &len);
-
-   time_last = get_token(&line, &len);
-   if (time_last == NULL) {
-      fprintf(stderr, "Warning: Missing time of the last packet, parsing interrupted.\n");
-      return EXIT_FAILURE;
-   }
-   flow->time_last = atoi(time_last);
-
-   bytes = get_token(&line, &len);
-   if (bytes == NULL) {
-      fprintf(stderr, "Warning: Missing number of transmitted bytes, parsing interrupted.\n");
-      return EXIT_FAILURE;
-   }
-   flow->bytes = atoi(bytes);
-
-   packets = get_token(&line, &len);
-   if (packets == NULL) {
-      fprintf(stderr, "Warning: Missing number of transmitted packets, parsing interrupted.\n");
-      return EXIT_FAILURE;
-   }
-   flow->packets = atoi(packets);
-
-   syn_flag = get_token(&line, &len);
-   if (syn_flag == NULL) {
-      fprintf(stderr, "Warning: Missing SYN flag, parsing interrupted.\n");
-      return EXIT_FAILURE;
-   }
-   flow->syn_flag = atoi(syn_flag);
-
-   return EXIT_SUCCESS;
-}
-
-host_t **add_host(host_t **hosts, host_t *host, uint64_t *hosts_cnt, uint64_t *hosts_max)
-{
-   // Reallocating array if needed.
-   if (*hosts_cnt == *hosts_max) {
-      *hosts_max *= 2;
-      if (*hosts_max == 0) {
-         fprintf(stderr, "Warning: Too many hosts in graph, next time it might overflow.\n");
-         *hosts_max -= 1;
-      }
-      host_t **tmp = (host_t **) realloc(hosts, (*hosts_max) * sizeof(host_t *));
-      if (tmp == NULL) {
-         fprintf(stderr, "Error: Not enough memory for hosts array.\n");
-         free(hosts);
-         return NULL;
-      }
-      hosts = tmp;
-   }
-
-   // Adding new host to array of hosts and updating counter.
-   hosts[(*hosts_cnt)++] = host;
-   return hosts;
-}
-
-graph_t *get_host(graph_t *graph, flow_t *flow)
-{
-   node_t *node;
-   host_t *host;
-   
-   if (graph->params->mode == MODE_SYN_FLOODING && flow->syn_flag != 1) {
-      // SYN flag is not set, skipping line.
-      return graph;
-   }
-
-   // Finding host with destination IP address.
-   node = create_node(flow->dst_ip, graph->root);
-
-   // Creating new host with destination address if not present.
-   if (node->host == NULL) {
-      host = create_host(flow->dst_ip, graph->params->mode);
-      if (host == NULL) {
-         goto error;
-      }
-      node->host = host;
-      graph->hosts = add_host(graph->hosts, host, &(graph->hosts_cnt), &(graph->hosts_max));
-      if (graph->hosts == NULL) {
-         goto error;
-      }
-   } else {
-      host = (host_t *) node->host;
-   }
-
+   int i, syn_packets;
 
    if (graph->params->mode == MODE_SYN_FLOODING) {
-      //fprintf(stderr, "To be completed.\n");
+      for (i = 0; i < graph->hosts_cnt; i ++) {
+         graph->hosts[i]->stat = 0;
+         syn_packets = graph->hosts[i]->intervals[array_max].syn_packets;
+         memset(graph->hosts[i]->intervals, 0, array_max + 1);
+         graph->hosts[i]->intervals[0].syn_packets = syn_packets;
+      }
+   }
+}
 
-      return graph;
+void print_graph(graph_t *graph)
+{
+   int i, j, p, sum;
+   char ip[INET_ADDRSTRLEN], name[BUFFER_TMP];
+   FILE *f;
+   struct hostent *he;
+
+   sum = 0;
+   p = PADDING;
+   he = NULL;
+
+   if (graph->params == NULL || graph == NULL || graph->params->level == 0) {
+      return;
    }
 
-   // TODO Complete other modes of detection.
+   snprintf(name, BUFFER_TMP, "res/flows_stats_%05d.txt", graph->params->file_cnt);
+   graph->params->file_cnt ++;
+
+   f = fopen(name, "w");
+   if (f == NULL) {
+      fprintf(stderr, "Warning: Cannot create empty file in given directory, output omitted.\n");
+      return;
+   }
+
+   if (graph->params->level > VERBOSE_BASIC && graph->hosts_cnt > 1000) {
+      fprintf(stderr, "Warning: Check for disk space, very large output may follow.\n");
+   }
+
+   for (i = 0; i < graph->hosts_cnt; i ++) {
+      if (graph->hosts[i]->stat == 1) {
+         sum ++;
+      }
+   }
+
+   fprintf(f, "Number of active hosts:            %*d\n", p, sum);
+
+   // Brief level
+   if (graph->params->level == VERBOSE_BRIEF) {
+      fclose(f);
+      return;
+   }
+
+   fprintf(f, "\nK-means algorithm parameters:\n");
+   fprintf(f, "* Clusters:                        %*d\n", p, graph->params->clusters);
+
+   qsort(graph->hosts, graph->hosts_cnt, sizeof(host_t *), compare_hosts);
+
+   // Printing information about hosts.
+   fprintf(f, "\nHosts:\n");
+   for (i = 0; i < graph->hosts_cnt; i ++) {
+      if (graph->hosts[i]->stat != 0) {
+         inet_ntop(AF_INET, &(graph->hosts[i]->ip), ip, INET_ADDRSTRLEN);
+         fprintf(f, "* Destination IP address:          %*s\n"
+                    "* Times accessed:                  %*d\n",
+                 p, ip, p, graph->hosts[i]->accesses);
+
+         // Translating IP address to domain name.
+         if (graph->params->level == VERBOSE_FULL) {
+            he = gethostbyaddr(&(graph->hosts[i]->ip), sizeof(in_addr_t), AF_INET);
+            if (he != NULL) {
+               fprintf(f, "* Domain:                          %*s\n", p, he->h_name);
+            }
+         }
+
+         // Printing information additional information from host structure.
+         if (graph->params->level >= VERBOSE_ADVANCED) {
+            if (graph->params->mode == MODE_SYN_FLOODING) {
+               // Printing number of SYN packets and assigned cluster in each observation interval.
+               fprintf(f, "* Observation intervals:\n");
+               for (j = 0; j < array_max; j ++) {
+                  fprintf(f, "* \t%02d) SYN packets:           %*.0lf\n"
+                             "* \t%02d) Cluster:               %*d\n",
+                          j, p, graph->hosts[i]->intervals[j].syn_packets,
+                          j, p, graph->hosts[i]->intervals[j].cluster);
+               }
+            }
+         }
+         fprintf(f, "*\n");
+      }
+   }
+
+   fclose(f);
+}
+
+graph_t *detection_handler(graph_t *graph)
+{
+   //int i;
+
+   if (graph->params->mode == MODE_SYN_FLOODING) {
+      if (graph->params->level > VERBOSITY) {
+         fprintf(stderr, "Info: Starting SYN flooding detection.\n");
+      }
+      //for (i = 0; i < graph->hosts_cnt; i ++) {
+         // TO BE DONE
+      //}
+   }
+
    else if (graph->params->mode == MODE_PORTSCAN_VER) {
-      fprintf(stderr, "To be completed.\n");
-
-      return graph;
+      if (graph->params->level > VERBOSITY) {
+         fprintf(stderr, "Info: Starting vertical port scan detection.\n");
+      }
+      // TODO Implement detection technique
+      // graph = detect_ver_portscan(graph);
    }
 
-   else {
-      fprintf(stderr, "To be completed.\n");
-
-      return graph;
+   else if (graph->params->mode == MODE_PORTSCAN_HOR) {
+      if (graph->params->level > VERBOSITY) {
+         fprintf(stderr, "Info: Starting horizontal port scan detection.\n");
+      }
+      // TODO Implement detection technique
+      // graph = detect_hor_portscan(graph);
    }
+
+   return graph;
 
    // Cleaning up after error.
-   error:
+   /*error:
       if (graph != NULL) {
          free_graph(graph);
       }
-      return NULL;
+      return NULL;*/
 }
 
-graph_t *parse_data(graph_t *graph)
+graph_t *parse_data(params_t *params)
 {
    int i, j, k, len, pid, pipefd[2], ret, status;
    char buffer[BUFFER_SIZE], *tmp;
    uint32_t bytes;
    uint64_t cnt_flows;
    flow_t flow;
+   graph_t *graph;
 
    j = 0;
    k = 0;
    cnt_flows = 0;
    status = 0;
+   memset(buffer, 0, BUFFER_SIZE);
    tmp = buffer;
+   graph = NULL;
+
+   if (params->mode != MODE_SYN_FLOODING && params->mode != MODE_PORTSCAN_VER && params->mode != MODE_PORTSCAN_HOR) {
+      fprintf(stderr, "Error: Unknown detection mode.\n");
+      goto error;
+   }
+
+   graph = create_graph(params);
+   if (graph == NULL) {
+      goto error;
+   }
 
    // Creating pipe for standard output.
    if (pipe(pipefd) != 0) {
@@ -589,6 +818,10 @@ graph_t *parse_data(graph_t *graph)
             if (buffer[i] == '\n') {
                len = i - j;
                buffer[i] = 0;
+               // Skipping empty line
+               if (i == j) {
+                  goto next;
+               }
                // Skipping comment line
                if (buffer[j] == '#') {
                   goto next;
@@ -598,6 +831,29 @@ graph_t *parse_data(graph_t *graph)
                ret = parse_line(graph, &flow, tmp, len);
                if (ret == EXIT_SUCCESS) {
                   cnt_flows ++;
+               } else {
+                  goto next;
+               }
+
+               // Time window reached, starting detection.
+               if (flow.time_first >= graph->time_last) {
+                  graph = detection_handler(graph);
+                  if (graph == NULL) {
+                     goto error;
+                  }
+                  print_graph(graph);
+                  graph->time_first = flow.time_first;
+                  graph->time_last = flow.time_first + params->time_window;
+                  if (params->flush_cnt == params->flush_iter) {
+                     free_graph(graph);
+                     graph = create_graph(params);
+                     if (graph == NULL) {
+                        goto error;
+                     }
+                  } else {
+                     reset_graph(graph);
+                     params->flush_cnt ++;
+                  }
                }
 
                // Adding host structure to graph.
@@ -606,7 +862,7 @@ graph_t *parse_data(graph_t *graph)
                   goto error;
                }
 
-               if (graph->params->progress > 0 && cnt_flows % graph->params->progress == 0) {
+               if ((params->progress > 0) && (cnt_flows % params->progress == 0)) {
                 fprintf(stderr, ".");
                 fflush(stderr);
                }
@@ -618,7 +874,7 @@ graph_t *parse_data(graph_t *graph)
          }
 
          // Shifting remaining bytes if the line was interrupted.
-         if (j != bytes) {
+         if (j != (bytes + k)) {
             len = bytes + k - j;
             memcpy(buffer, tmp, len);
             tmp = buffer;
@@ -638,71 +894,8 @@ graph_t *parse_data(graph_t *graph)
       }
    }
 
-   if (graph->params->level > 0) {
-      fprintf(stderr,"Info: All data have been successfully parsed and stored into memory.\n");
-   }
-
-   return graph;
-
-   // Cleaning up after error.
-   error:
-      if (graph != NULL) {
-         free_graph(graph);
-      }
-      return NULL;
-}
-
-int detect_syn_flooding(graph_t *graph)
-{
-
-   return EXIT_SUCCESS;
-}
-
-graph_t *detection_handler(params_t *params)
-{
-   int ret;
-   graph_t *graph;
-
-   graph = create_graph(params);
-   if (graph == NULL) {
-      goto error;
-   }
-
-   graph = parse_data(graph);
-   if (graph == NULL) {
-      goto error;
-   }
-
-   if (params->mode == MODE_SYN_FLOODING) {
-      if (params->level != 0) {
-         fprintf(stderr, "Info: Starting SYN flooding detection.\n");
-      }
-      ret = detect_syn_flooding(graph);
-      if (ret == EXIT_FAILURE) {
-         goto error;
-      }
-   }
-
-   else if (params->mode == MODE_PORTSCAN_VER) {
-      if (params->level != 0) {
-         fprintf(stderr, "Info: Starting vertical port scan detection.\n");
-      }
-      // TODO Implement detection technique
-      // graph = detect_ver_portscan(graph);
-   }
-
-   else if (params->mode == MODE_PORTSCAN_HOR) {
-      if (params->level != 0) {
-         fprintf(stderr, "Info: Starting horizontal port scan detection.\n");
-      }
-      // TODO Implement detection technique
-      // graph = detect_hor_portscan(graph);
-   }
-
-   else {
-      if (params->level != 0) {
-         fprintf(stderr, "Error: Unknown detection mode.\n");
-      }
+   if (graph->params->level > VERBOSITY) {
+      fprintf(stderr,"Info: All data have been successfully processed.\n");
    }
 
    return graph;
@@ -722,7 +915,7 @@ int main(int argc, char **argv)
    graph_t *graph;
 
    failure = 0;
-   
+
    // Parsing input parameters.
    params = params_init(argc, argv);
    if (params == NULL) {
@@ -730,11 +923,11 @@ int main(int argc, char **argv)
       goto cleanup;
    }
 
-   graph = detection_handler(params);
+   graph = parse_data(params);
    if (graph == NULL) {
       failure = 1;
       goto cleanup;
-   }
+   }print_graph(graph);
 
    // Cleaning up allocated structures.
    cleanup:
