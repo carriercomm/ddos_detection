@@ -52,30 +52,34 @@
 #include <stdint.h>
 #include <string.h>
 #include <getopt.h>
+#include <unistd.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
+#include <sys/wait.h>
 
 /*!
  * \name Default values
  * Defines macros used by p2p botnet detector.
  * \{ */
-#define NUMBER_LEN 5 /*< Maximal length of number for buffer. */
-#define PADDING 16 /*< Padding width for log files. */
+#define NUMBER_LEN 5 /*!< Maximal length of number for buffer. */
+#define PADDING 16 /*!< Padding width for log files. */
 
-#define PROTOCOL_TCP 6 /*< TCP protocol number. */
-#define PROTOCOL_UDP 17 /*< UDP protocol number. */
+#define PROTOCOL_TCP 6 /*!< TCP protocol number. */
+#define PROTOCOL_UDP 17 /*!< UDP protocol number. */
 
-#define BUFFER_TMP 256 /*< Size of a temporary buffer. */
+#define BUFFER_TMP 256 /*!< Size of a temporary buffer. */
+#define BUFFER_SIZE 8192 /*!< Size of a buffer for reading standard input. */
 
-#define HOSTS_INIT 32768 /*< Init size of array with hosts. */
+#define HOSTS_INIT 32768 /*!< Init size of array with hosts. */
 
-#define BITS_IP4 32 /*< Number of bits in IPv4 address. */
-#define MASK_IP4 0x80000000 /*< Mask number for 32 bit address. */
+#define BITS_IP4 32 /*!< Number of bits in IPv4 address. */
+#define MASK_IP4 0x80000000 /*!< Mask number for 32 bit address. */
 
-#define INTERVAL 60 /*< Default observation interval of SYN packets in seconds. */
-#define TIME_WINDOW 3600 /*< Default observation time window defined in seconds. */
+#define INTERVAL 60 /*!< Default observation interval of SYN packets in seconds. */
+#define TIME_WINDOW 3600 /*!< Default observation time window defined in seconds. */
 
-#define DELIMITER " " /*< Default delimiter for parsing CSV files. */
-#define OPTIONS "d:f:hHL:p:t:w:" /*< Options for for command line. */
+#define DELIMITER ' ' /*!< Default delimiter for parsing CSV files. */
+#define OPTIONS "d:f:hHL:p:t:w:" /*!< Options for for command line. */
 /*! \} */
 
 /*!
@@ -84,8 +88,8 @@
  */
 enum mode {
    MODE_SYN_FLOODING = 1, /*!< SYN flooding detection mode. */
-   HOST_PORTSCAN_VER = 2, /*!< Portscan detection mode. */
-   HOST_PORTSCAN_HOR = 3, /*!< Portscan detection mode. */
+   MODE_PORTSCAN_VER = 2, /*!< Portscan detection mode. */
+   MODE_PORTSCAN_HOR = 3, /*!< Portscan detection mode. */
 };
 
 /*!
@@ -114,15 +118,43 @@ typedef struct params_t {
 } params_t;
 
 /*!
+ * \brief Flow record structure
+ * Structure containing all fields of a flow record.
+ */
+typedef struct flow_t {
+    in_addr_t dst_ip; /*!< Destination IP address. */
+    in_addr_t src_ip; /*!< Source IP address. */
+    uint16_t dst_port; /*!< Destination port. */
+    uint16_t src_port; /*!< Source port. */
+    uint8_t protocol; /*!< Used protocol. */
+    time_t time_first; /*!< Timestamp of the first packet. */
+    time_t time_last; /*!< Timestamp of the last packet. */
+    uint64_t bytes; /*!< Number of transmitted bytes. */
+    uint32_t packets; /*!<  Number of transmitted packets. */
+    uint8_t syn_flag; /*!< SYN flag. */
+} flow_t;
+
+/*!
+ * \brief Interval structure
+ * Structure of interval containing number of SYN packets in the given interval
+ * and information of assigned cluster to determine whether the traffic in the given
+ * interval is SYN flooding attack or not.
+ */
+typedef struct intvl_t {
+    char cluster; /*!< Flag of assigned cluster. */
+    int syn_packets; /*!< Number of SYN packets. */
+} intvl_t;
+
+/*!
  * \brief Local host structure.
  * Structure containing information about local host such as IP address and other
  * peers with whom was communicating during the given time period. It also contains
  * information about mutual contacts with other local hosts.
  */
-typedef struct host_t {\
+typedef struct host_t {
    in_addr_t ip; /*!< IP address of the local host. */
    uint8_t stat; /*!< Host status for further examination. */
-   uint32_t *syn_packets; /*!< Array of mutual contacts with same index as the pointers of the edges. */
+   struct intvl_t *intervals; /*!< Array of mutual contacts with same index as the pointers of the edges. */
 } host_t;
 
 /*!
@@ -133,6 +165,7 @@ typedef struct host_t {\
 typedef struct graph_t {
    uint64_t hosts_cnt; /*!< Number of hosts determined by destination IP address in graph. */
    uint64_t hosts_max; /*!< Maximum number of hosts in graph. */
+   struct params_t *params; /*!< Pointer to structure with all initialized parameters. */
    struct node_t *root; /*!< Pointer to root of binary tree with all local IPv4 addresses. */
    struct host_t **hosts; /*!< Pointer to array of hosts. */
 } graph_t;
@@ -146,6 +179,128 @@ typedef struct graph_t {
  * \return Pointer to allocated structure with initialized parameters.
  */
 params_t *params_init(int argc, char **argv);
+
+/*!
+ * \brief Creating IPv4 host function.
+ * Function to create or search IPv4 address node in binary tree.
+ * \param[in] ip IPv4 address to add into binary tree.
+ * \param[in] root Root of IPv4 binary tree.
+ * \return Pointer to belonging node on success, otherwise NULL.
+ */
+node_t *create_node(in_addr_t ip, node_t *root);
+
+/*!
+ * \brief Searching IPv4 host function.
+ * Function to search IPv4 address in binary tree.
+ * \param[in] ip IPv4 address to be searched in binary tree.
+ * \param[in] root Root of IPv4 binary tree.
+ * \return Pointer to belonging node on success, otherwise NULL.
+ */
+node_t *search_node(in_addr_t ip, node_t *root);
+
+/*!
+ * \brief Cleaning function.
+ * Function to free all allocated memory for binary tree structure
+ * using recursion. At the end, it also free all associated local host structure.
+ * \param[in] node Node in binary tree to be deleted.
+ */
+void delete_node(node_t *node);
+
+/*!
+ * \brief Allocating host function.
+ * Function to allocate new host to graph structure and return a pointer
+ * to newly created host.
+ * \param[in] ip IP address of new the host.
+ * \param[in] mode Mode type of the DDoS detection.
+ * \return Pointer to newly created host, otherwise NULL.
+ */
+host_t *create_host(in_addr_t ip, int mode);
+
+/*!
+ * \brief Allocating graph function.
+ * Function to allocate data structure of nodes and hosts.
+ * \param[in] params Pointer to structure with all initialized parameters.
+ * \return graph Pointer to allocated graph structure.
+ */
+graph_t *create_graph(params_t *params);
+
+/*!
+ * \brief Deallocating graph function.
+ * Function to free data structure of nodes and hosts.
+ * \param[in] graph Pointer to existing graph structure.
+ */
+void free_graph(graph_t *graph);
+
+/*!
+ * \brief Parsing function.
+ * Function to parse given line into tokens based on given delimeter.
+ * \param[in,out] string Current pointer to token in line.
+ * \param[in,out] len Current remaining characters in line.
+ * \return Pointer to the beginning of the token, NULL for empty value.
+ */
+char *get_token(char **string, int *len);
+
+/*!
+ * \brief Parsing function.
+ * Function to parse given line to tokens and convert them into values
+ * of the flow record structure.
+ * \param[in] graph Pointer to existing graph structure.
+ * \param[in] flow Pointer to flow record structure.
+ * \param[in] line Pointer to string with line to be parsed.
+ * \param[in] len Length of the line in bytes.
+ * \return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
+int parse_line(graph_t *graph, flow_t *flow, char *line, int len);
+
+/*!
+ * \brief Adding host function.
+ * Function to add host to array of hosts.
+ * It also reallocates the array if needed.
+ * \param[in,out] hosts Array of pointers to the hosts.
+ * \param[in] host Pointer to structure to be added to the array.
+ * \param[in,out] hosts_cnt Number of hosts in the array.
+ * \param[in,out] hosts_max Maximum number of hosts in the array.
+ * \return Pointer to array of hosts on success, otherwise NULL.
+ */
+host_t **add_host(host_t **hosts, host_t *host, uint64_t *hosts_cnt, uint64_t *hosts_max);
+
+/*!
+ * \brief Adding host function
+ * Function to add given flow record to graph of hosts based on given
+ * destination IP address as the main identifier.
+ * \param[in] flow Pointer to flow record structure.
+ * \param[in] graph Pointer to existing graph structure.
+ * \return Pointer to graph structure on success, otherwise NULL.
+ */
+graph_t *get_host(graph_t *graph, flow_t *flow);
+
+/*!
+ * \brief Parsing function
+ * Function to parse data using forking process through pipe.
+ * It opens a pipe to redirect standard output which receives
+ * all desired data.
+ * \param[in] graph Pointer to existing graph structure.
+ * \return Pointer to graph structure on success, otherwise NULL.
+ */
+graph_t *parse_data(graph_t *graph);
+
+/*!
+ * \brief SYN flooding detection
+ * Function to detect SYN flooding attack using k-means algorithm in given
+ * time window based on the observation intervals.
+ * \param[in] graph Pointer to existing graph structure.
+ * \return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
+int detect_syn_flooding(graph_t *graph);
+
+/*!
+ * \brief Detection handler
+ * Function to decide which detection mode and algorithm will be used based on
+ * initialized parameters given in command line.
+ * \param[in] params Pointer to structure with all initialized parameters.
+ * \return Pointer to graph structure on success, otherwise NULL.
+ */
+graph_t *detection_handler(params_t *params);
 
 /*!
  * \brief Main function.
