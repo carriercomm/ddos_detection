@@ -51,6 +51,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <time.h>
 #include <getopt.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -73,6 +74,8 @@
 
 #define HOSTS_INIT 32768 /*!< Init size of array with hosts. */
 
+#define ALL_PORTS 65535 /*!< Maximum number of network ports. */
+
 #define BITS_IP4 32 /*!< Number of bits in IPv4 address. */
 #define MASK_IP4 0x80000000 /*!< Mask number for 32 bit address. */
 
@@ -83,6 +86,9 @@
 #define CLUSTERS 2 /*!< Default number of clusters to be used in k-means algorithm. */
 
 #define DELIMITER ' ' /*!< Default delimiter for parsing CSV files. */
+#define TIME_FORMAT "%a %b %d %Y %H:%M:%S" /*!< Default human readable time format. */
+#define DATA_FILE "/tmp/data.txt" /*!< Data file location used by gnuplot.*/
+#define GNUPLOT "/tmp/config.gpl" /*!< Gnuplot configuration file location.*/
 #define OPTIONS "d:e:f:hHk:L:p:t:w:" /*!< Options for for command line. */
 /*! \} */
 
@@ -103,9 +109,10 @@ enum verbose_level {
  * Mode type of the DDoS detection.
  */
 enum mode {
-   MODE_SYN_FLOODING = 1, /*!< SYN flooding detection mode. */
-   MODE_PORTSCAN_VER = 2, /*!< Portscan detection mode. */
-   MODE_PORTSCAN_HOR = 3, /*!< Portscan detection mode. */
+   MODE_SYN_FLOODING = 0x01, /*!< SYN flooding detection mode. */
+   MODE_PORTSCAN_VER = 0x02, /*!< Portscan detection mode. */
+   MODE_PORTSCAN_HOR = 0x04, /*!< Portscan detection mode. */
+   MODE_ALL = 0x07, /*!< All detection modes. */
 };
 
 /*!
@@ -125,7 +132,7 @@ typedef struct node_t {
  * of module to be used in following functions.
  */
 typedef struct params_t {
-   int mode; /*!< Flag which type od DDoS detection mode should be used. */
+   int mode; /*!< Flag which type of DDoS detection mode should be used. */
    int clusters; /*!< Number of clusters to be used in k-means algorithm. */
    int file_cnt; /*!< Counter for files with hosts statistics. */
    int flush_cnt; /*!< Counter of flush iterations. */
@@ -166,6 +173,17 @@ typedef struct intvl_t {
 } intvl_t;
 
 /*!
+ * \brief Port structure
+ * Structure of ports containing number of the destination port and times accesses
+ * to detect if the host was under vertical port scan attack or not.
+ */
+typedef struct port_t {
+    uint16_t port_num; /*!< Destination port number. */
+    uint32_t accesses; /*!< Number of times the given address has been accessed. */
+    struct port_t *next; /*!< Pointer to the next port. */
+} port_t;
+
+/*!
  * \brief Local host structure.
  * Structure containing information about local host such as IP address and other
  * peers with whom was communicating during the given time period. It also contains
@@ -175,7 +193,9 @@ typedef struct host_t {
    in_addr_t ip; /*!< IP address of the local host. */
    uint8_t stat; /*!< Host status for further examination. */
    uint32_t accesses; /*!< Number of times the given address has been accessed. */
+   uint32_t ports_cnt; /*!< Number of different ports used to reach the given host. */
    struct intvl_t *intervals; /*!< Array of mutual contacts with same index as the pointers of the edges. */
+   struct port_t *ports; /*< Pointer to list of used ports structures. */
 } host_t;
 
 /*!
@@ -202,15 +222,6 @@ typedef struct graph_t {
  * \return Pointer to allocated structure with initialized parameters.
  */
 params_t *params_init(int argc, char **argv);
-
-/*!
- * \brief Comparing function.
- * Function to compare two host structure based on times of accesses.
- * \param[in] elem1 Pointer to the first element to be compared.
- * \param[in] elem2 Pointer to the second element to be compared.
- * \return Number indicating greater, equal or less sign.
- */
-int compare_hosts(const void *elem1, const void *elem2);
 
 /*!
  * \brief Parsing function.
@@ -292,6 +303,25 @@ host_t **add_host(host_t **hosts, host_t *host, uint64_t *hosts_cnt, uint64_t *h
 graph_t *get_host(graph_t *graph, flow_t *flow);
 
 /*!
+ * \brief Comparing function.
+ * Function to compare two host structure based on times of accesses.
+ * \param[in] elem1 Pointer to the first element to be compared.
+ * \param[in] elem2 Pointer to the second element to be compared.
+ * \return Number indicating greater, equal or less sign.
+ */
+int compare_host(const void *elem1, const void *elem2);
+
+/*!
+ * \brief Plotting function
+ * Function to create a plot from the host structure to show
+ * the anomaly in retrived data.
+ * \param[in] graph Pointer to existing graph structure.
+ * \param[in] idx Index of a host to be plotted.
+ * \param[in] mode Type of DDoS detection mode.
+ */
+void print_host(graph_t *graph, int idx, int mode);
+
+/*!
  * \brief Allocating graph function.
  * Function to allocate data structure of nodes and hosts.
  * \param[in] params Pointer to structure with all initialized parameters.
@@ -313,6 +343,9 @@ void free_graph(graph_t *graph);
  * \param[in] graph Pointer to existing graph structure.
  */
 void reset_graph(graph_t *graph);
+
+
+void config_graph(graph_t *graph);
 
 /*!
  * \brief Statistics graph function.
