@@ -49,6 +49,8 @@
 #include "ddos_detection.h"
 
 int array_max; /*!< Global maximum size of SYN packets array. */
+int flush; /*!< Global maximum number of intervals before flushing all ports. */
+int window; /*!< Global counter of time window reached. */
 
 params_t *params_init(int argc, char **argv)
 {
@@ -65,7 +67,7 @@ params_t *params_init(int argc, char **argv)
       "  -k NUM       Set the number of clusters used by k-means algorithm, 2 by default.\n"
       "  -L LEVEL     Print graphs based on given verbosity level, range 1 to 5.\n"
       "  -p NUM       Show progress - print a dot every N flows.\n"
-      "  -t TIME      Set the observation time window in seconds, 1 minute by default.\n"
+      "  -t TIME      Set the observation interval in seconds, 1 minute by default.\n"
       "  -w TIME      Set the observation time window in seconds, 1 hour by default.\n"
       "Detection modes:\n"
       "   1) SYN flooding detection only.\n"
@@ -85,7 +87,6 @@ params_t *params_init(int argc, char **argv)
 
    params->mode = MODE_SYN_FLOODING;
    params->clusters = CLUSTERS;
-   params->file_cnt = 1;
    params->flush_cnt = 1;
    params->flush_iter = FLUSH_ITER;
    params->progress = 0;
@@ -156,11 +157,12 @@ params_t *params_init(int argc, char **argv)
    }
 
    // Determining maximum number for SYN packets array based on time window and observation intervals.
-   array_max = params->time_window / params->interval;
-   if (array_max <= 1) {
-      fprintf(stderr, "Error: Time window cannot be less or equal than observation interval.\n");
+   array_max = (params->time_window / params->interval) + ARRAY_EXTRA;
+   if (array_max <= ARRAY_MIN) {
+      fprintf(stderr, "Error: Time window cannot be less or closely equal than observation interval.\n");
       goto error;
    }
+   flush = PORT_WINDOW / params->interval;
 
    return params;
 
@@ -279,13 +281,15 @@ int parse_line(graph_t *graph, flow_t *flow, char *line, int len)
    }
    flow->syn_flag = atoi(syn_flag);
 
-   if (graph->time_first == 0) {
-      graph->time_first = flow->time_first;
-      graph->time_last = flow->time_first + graph->params->time_window;
+   if (graph->window_first == 0) {
+      graph->interval_first = flow->time_first;
+      graph->interval_last = flow->time_first + graph->params->interval;
+      graph->window_first = flow->time_first;
+      graph->window_last = flow->time_first + graph->params->time_window;
    }
 
    // Delayed flow record, skipping line.
-   if (flow->time_first < graph->time_first) {
+   if (flow->time_first < graph->interval_first) {
       fprintf(stderr, "Warning: Delayed flow record, parsing interrupted.\n");
       return EXIT_FAILURE;
    }
@@ -433,7 +437,7 @@ host_t *create_host(in_addr_t ip, int mode)
    host->ports = NULL;
 
    if ((mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
-      host->intervals = (intvl_t *) calloc(array_max + 1, sizeof(intvl_t));
+      host->intervals = (intvl_t *) calloc(array_max, sizeof(intvl_t));
       if (host->intervals == NULL) {
           fprintf(stderr, "Error: Not enough memory for  host structure.\n");
           return NULL;
@@ -467,8 +471,7 @@ host_t **add_host(host_t **hosts, host_t *host, uint64_t *hosts_cnt, uint64_t *h
 
 graph_t *get_host(graph_t *graph, flow_t *flow)
 {
-   int cnt, first, i, last, seconds;
-   char flag;
+   int cnt, i, seconds;
    float pps;
    time_t diff;
    node_t *node;
@@ -479,9 +482,6 @@ graph_t *get_host(graph_t *graph, flow_t *flow)
       // SYN flag is not set, skipping line.
       return graph;
    }
-
-   // Setting flag if time window has been reached.
-   flag = 0;
 
    // Finding host with destination IP address.
    node = create_node(flow->dst_ip, graph->root);
@@ -505,41 +505,30 @@ graph_t *get_host(graph_t *graph, flow_t *flow)
 
    // Completing data of ports.
    if ((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
-      // Getting indexes of the interval array.
-      first = ((graph->params->time_window + (flow->time_first - graph->time_first)) / graph->params->interval) - graph->params->interval;
-      last = ((graph->params->time_window + (flow->time_last - graph->time_first)) / graph->params->interval) - graph->params->interval;
 
       // Adding all SYN packets in the same interval.
-      if (first == last) {
-         host->intervals[first].syn_packets += flow->packets;
+      if (flow->time_last < graph->interval_last) {
+         host->intervals[graph->interval_idx].syn_packets += flow->packets;
       }
 
       // Distributing SYN packets among various intervals using linear function.
       else {
          diff = flow->time_last - flow->time_first;
-         cnt = last - first;
          pps = ((float) flow->packets) / ((float) diff);
 
-         // Calculating the seconds residue of the first interval.
-         seconds = ((first + 1) * graph->params->interval) - (flow->time_first - graph->time_first);
-         host->intervals[first].syn_packets += (seconds * pps);
-
-         // Time window reached, distributing the residue for next iteration.
-         if (flow->time_last >= graph->time_last) {
-            host->intervals[array_max].syn_packets += ((diff - seconds) * pps);
-            flag = 1;
+         // Calculating the seconds residue of the intervals.
+         seconds = graph->interval_last - flow->time_first;
+         host->intervals[graph->interval_idx].syn_packets += (seconds * pps);
+         seconds = diff - seconds;
+         if (seconds <= graph->params->interval) {
+            host->intervals[(graph->interval_idx+1)%array_max].syn_packets += (seconds * pps);
          }
-
-         if (flag == 0) {
-            if (cnt > 2) {
-              for (i = 0; i < cnt - 2; i ++) {
-                 host->intervals[first+i+1].syn_packets += (graph->params->interval * pps);
-              }
+         else {
+            cnt = seconds / graph->params->interval;
+            for (i = 0; i < cnt; i ++) {
+               host->intervals[(graph->interval_idx+i+1)%array_max].syn_packets += (graph->params->interval * pps);
             }
-
-            // Calculating the seconds residue of the first interval.
-            seconds = (flow->time_last - graph->time_first) - (last * graph->params->interval);
-            host->intervals[last].syn_packets += (seconds * pps);
+            host->intervals[(graph->interval_idx+cnt+1)%array_max].syn_packets += ((seconds % graph->params->interval) * pps);
          }
       }
    }
@@ -650,7 +639,7 @@ void print_host(graph_t *graph, int idx, int mode)
    }
 
    // Configuring gnuplot configuration file.
-   time = localtime(&(graph->time_first));
+   time = localtime(&(graph->window_first));
    if (time == NULL) {
       fprintf(stderr, "Warning: Cannot convert UNIX timestamp, plot omitted.\n");
       return;
@@ -666,17 +655,24 @@ void print_host(graph_t *graph, int idx, int mode)
 
    if (mode == MODE_SYN_FLOODING) {
       // Storing SYN flooding data.
-      for (i = 0; i < array_max; i ++) {
-         fprintf(f, "%d %.0lf\n", i, graph->hosts[idx]->intervals[i].syn_packets);
+      if (window == 0) {
+         for (i = 0; i < graph->interval_idx; i ++) {
+            fprintf(f, "%d %.0lf\n", i, graph->hosts[idx]->intervals[i].syn_packets);
+         }
+      } else {
+         for (i = 0; i < (array_max - ARRAY_EXTRA); i ++) {
+            fprintf(f, "%d %.0lf\n", i, graph->hosts[idx]->intervals[(graph->interval_idx+ARRAY_EXTRA+i)%array_max].syn_packets);
+         }
       }
       fclose(f);
 
-      fprintf(g, "set xlabel \"Minute\"\n"
+      fprintf(g, "set xlabel \"Time interval\"\n"
                  "set ylabel \"# SYN packets\"\n"
                  "set y2label \"# SYN packets\"\n"
-                 "set output \"res/SYN%01d_%03d(%s).png\"\n"
+                 "set xrange [0:%d]\n"
+                 "set output \"res/%s_SYN_w%d_t%02d.png\"\n"
                  "plot \"%s\" using 1:2 with line\n",
-              graph->params->file_cnt, idx, ip, DATA_FILE);
+              array_max - ARRAY_EXTRA - 1, ip, window, (graph->interval_idx - 1 + (window * ARRAY_EXTRA)) % array_max, DATA_FILE);
       fclose(g);
    }
 
@@ -694,9 +690,9 @@ void print_host(graph_t *graph, int idx, int mode)
                  "set yrange [0:]\n"
                  "set ylabel \"# Accesses\"\n"
                  "set y2label \"# Accesses\"\n"
-                 "set output \"res/VPS%01d_%03d(%s).png\"\n"
-                 "plot \"%s\" using 1:2 with dots\n",
-              ALL_PORTS, graph->params->file_cnt, idx, ip, DATA_FILE);
+                 "set output \"res/%s_VPS_w%d_t%02d.png\"\n"
+                 "plot \"%s\" using 1:2\n",
+              ALL_PORTS, ip, window, (graph->interval_idx - 1 + (window * ARRAY_EXTRA)) % array_max, DATA_FILE);
       fclose(g);
    }
 
@@ -732,7 +728,9 @@ graph_t *create_graph(params_t *params)
    }
 
    // Initializing structure.
-   graph->time_first = graph->time_last = 0;
+   graph->interval_idx = graph->interval_cnt = 0;
+   graph->interval_first = graph->interval_last = 0;
+   graph->window_first = graph->window_last = 0;
    graph->hosts_cnt = 0;
    graph->hosts_max = HOSTS_INIT;
    graph->params = params;
@@ -774,30 +772,33 @@ void free_graph(graph_t *graph)
 
 void reset_graph(graph_t *graph)
 {
-   int i, syn_packets;
+   int i;
    port_t *tmp;
 
-   if ((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
+   if (((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) && (window != 0)) {
       for (i = 0; i < graph->hosts_cnt; i ++) {
          graph->hosts[i]->stat = 0;
-         syn_packets = graph->hosts[i]->intervals[array_max].syn_packets;
-         memset(graph->hosts[i]->intervals, 0, array_max + 1);
-         graph->hosts[i]->intervals[0].syn_packets = syn_packets;
+         graph->hosts[i]->intervals[(graph->interval_idx+ARRAY_EXTRA)%array_max].syn_packets = 0;
       }
    }
 
-   if ((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
-      for (i = 0; i < graph->hosts_cnt; i ++) {
-         if (graph->hosts[i]->ports != NULL) {
-            while (graph->hosts[i]->ports != NULL) {
-               tmp = graph->hosts[i]->ports;
-               graph->hosts[i]->ports = graph->hosts[i]->ports->next;
-               free (tmp);
+   if ((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) {
+      graph->interval_cnt ++;
+      if (graph->interval_cnt == flush) {
+         fprintf(stderr, "Info: Flushing all used ports after %d intervals.\n", flush);
+         graph->interval_cnt = 0;
+         for (i = 0; i < graph->hosts_cnt; i ++) {
+            if (graph->hosts[i]->ports != NULL) {
+               while (graph->hosts[i]->ports != NULL) {
+                  tmp = graph->hosts[i]->ports;
+                  graph->hosts[i]->ports = graph->hosts[i]->ports->next;
+                  free (tmp);
+               }
             }
+            graph->hosts[i]->stat = 0;
+            graph->hosts[i]->ports_cnt = 0;
+            graph->hosts[i]->ports = NULL;
          }
-         graph->hosts[i]->stat = 0;
-         graph->hosts[i]->ports_cnt = 0;
-         graph->hosts[i]->ports = NULL;
       }
    }
 }
@@ -805,8 +806,9 @@ void reset_graph(graph_t *graph)
 void print_graph(graph_t *graph)
 {
    int i, j, p, sum;
-   char ip[INET_ADDRSTRLEN], name[BUFFER_TMP];
+   char buffer[BUFFER_TMP], ip[INET_ADDRSTRLEN], name[BUFFER_TMP];
    FILE *f;
+   struct tm *time;
    struct hostent *he;
    port_t *head;
 
@@ -818,7 +820,21 @@ void print_graph(graph_t *graph)
       return;
    }
 
-   snprintf(name, BUFFER_TMP, "res/flows_stats_%05d.txt", graph->params->file_cnt);
+   // Setting file name based on a minute.
+   time = localtime(&(graph->interval_first));
+   if (time == NULL) {
+      fprintf(stderr, "Warning: Cannot convert UNIX timestamp, output omitted.\n");
+      return;
+   }
+   if (strftime(buffer, BUFFER_TMP, FILE_FORMAT, time) == 0) {
+      fprintf(stderr, "Warning: Cannot convert UNIX timestamp, output omitted.\n");
+      return;
+   }
+   snprintf(name, BUFFER_TMP, "res/%s.log", buffer);
+   if (strftime(buffer, BUFFER_TMP, TIME_FORMAT, time) == 0) {
+      fprintf(stderr, "Warning: Cannot convert UNIX timestamp, output omitted.\n");
+      return;
+   }
 
    f = fopen(name, "w");
    if (f == NULL) {
@@ -826,7 +842,7 @@ void print_graph(graph_t *graph)
       return;
    }
 
-   if (graph->params->level == VERBOSE_FULL) {
+   if (graph->params->level > VERBOSE_BASIC) {
       fprintf(stderr, "Warning: Check for disk space, very large output may follow.\n");
    }
 
@@ -836,82 +852,76 @@ void print_graph(graph_t *graph)
       }
    }
 
+   fprintf(f, "Time:                      %*s\n", p, buffer);
    fprintf(f, "Number of active hosts:            %*d\n", p, sum);
-
-   // Brief level
-   if (graph->params->level == VERBOSE_BRIEF) {
-      fclose(f);
-      return;
-   }
-
    fprintf(f, "\nK-means algorithm parameters:\n");
    fprintf(f, "* Clusters:                        %*d\n", p, graph->params->clusters);
 
-   qsort(graph->hosts, graph->hosts_cnt, sizeof(host_t *), compare_host);
-
-   // Printing information about hosts.
-   fprintf(f, "\nHosts:\n");
-   for (i = 0; i < graph->hosts_cnt; i ++) {
-      if (graph->hosts[i]->stat != 0) {
-         inet_ntop(AF_INET, &(graph->hosts[i]->ip), ip, INET_ADDRSTRLEN);
-         fprintf(f, "* Destination IP address:          %*s\n"
-                    "* Times accessed:                  %*d\n",
-                 p, ip, p, graph->hosts[i]->accesses);
+   if (graph->params->level >= VERBOSE_BASIC) {
+      //qsort(graph->hosts, graph->hosts_cnt, sizeof(host_t *), compare_host);
+      // Creating plot of possible DDoS attack victims.
+      for (i = 0; i < graph->hosts_cnt; i ++) {
+         if ((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
+            if (i == 177) {
+               print_host(graph, i, MODE_SYN_FLOODING);
+            }
+         }
          if ((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) {
-            fprintf(f, "* Ports used:                      %*u\n", p, graph->hosts[i]->ports_cnt);
-         }
-
-         // Creating plot of possible DDoS attack victims.
-         if (graph->params->level >= VERBOSE_ADVANCED) {
-            if ((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
-               if (i < 32) {
-                  print_host(graph, i, MODE_SYN_FLOODING);
-               }
-            }
-            if ((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) {
-               if (i < 32) {
-                  print_host(graph, i, MODE_PORTSCAN_VER);
-               }
+            if (i == 177) {
+               print_host(graph, i, MODE_PORTSCAN_VER);
             }
          }
-
-         // Translating IP address to domain name.
-         if (graph->params->level >= VERBOSE_EXTRA) {
-            he = gethostbyaddr(&(graph->hosts[i]->ip), sizeof(in_addr_t), AF_INET);
-            if (he != NULL) {
-               fprintf(f, "* Domain:                          %*s\n", p, he->h_name);
-            }
-         }
-
-         // Printing information additional information from host structure, not recommended.
-         if (graph->params->level == VERBOSE_FULL) {
-            if ((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
-               // Printing number of SYN packets and assigned cluster in each observation interval.
-               fprintf(f, "* Observation intervals:\n");
-               for (j = 0; j < array_max; j ++) {
-                  fprintf(f, "* \t%02d) SYN packets:           %*.0lf\n"
-                             "* \t%02d) Cluster:               %*d\n",
-                          j, p, graph->hosts[i]->intervals[j].syn_packets,
-                          j, p, graph->hosts[i]->intervals[j].cluster);
-               }
-            }
-            if ((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) {
-               // Printing number of SYN packets and assigned cluster in each observation interval.
-               fprintf(f, "* Times port accessed:\n");
-               head = graph->hosts[i]->ports;
-               while (head != NULL) {
-                  fprintf(f, "* \tDestination port:          %*d\n"
-                             "* \tTimes accessed:            %*u\n",
-                          p, head->port_num, p, head->accesses);
-                  head = head->next;
-               }
-            }
-         }
-         fprintf(f, "*\n");
       }
    }
 
-   graph->params->file_cnt ++;
+   // Printing information about hosts.
+   if (graph->params->level >= VERBOSE_ADVANCED) {
+      fprintf(f, "\nHosts:\n");
+      for (i = 0; i < graph->hosts_cnt; i ++) {
+         if (graph->hosts[i]->stat != 0) {
+            inet_ntop(AF_INET, &(graph->hosts[i]->ip), ip, INET_ADDRSTRLEN);
+            fprintf(f, "* Destination IP address:          %*s\n"
+                       "* Times accessed:                  %*d\n",
+                    p, ip, p, graph->hosts[i]->accesses);
+            if ((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) {
+               fprintf(f, "* Ports used:                      %*u\n", p, graph->hosts[i]->ports_cnt);
+            }
+
+            // Translating IP address to domain name.
+            if (graph->params->level >= VERBOSE_EXTRA) {
+               he = gethostbyaddr(&(graph->hosts[i]->ip), sizeof(in_addr_t), AF_INET);
+               if (he != NULL) {
+                  fprintf(f, "* Domain:                          %*s\n", p, he->h_name);
+               }
+            }
+
+            // Printing information additional information from host structure, not recommended.
+            if (graph->params->level == VERBOSE_FULL) {
+               if ((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
+                  // Printing number of SYN packets and assigned cluster in each observation interval.
+                  fprintf(f, "* Observation intervals:\n");
+                  for (j = 0; j < graph->params->interval; j ++) {
+                     fprintf(f, "* \t%02d) SYN packets:           %*.0lf\n",
+                             j, p, graph->hosts[i]->intervals[(graph->interval_idx+ARRAY_EXTRA+j)%array_max].syn_packets);
+                  }
+               }
+               if ((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) {
+                  // Printing number of SYN packets and assigned cluster in each observation interval.
+                  fprintf(f, "* Times port accessed:\n");
+                  head = graph->hosts[i]->ports;
+                  while (head != NULL) {
+                     fprintf(f, "* \tDestination port:          %*d\n"
+                                "* \tTimes accessed:            %*u\n",
+                             p, head->port_num, p, head->accesses);
+                     head = head->next;
+                  }
+               }
+            }
+            fprintf(f, "*\n");
+         }
+      }
+   }
+
    fclose(f);
 }
 
@@ -946,7 +956,7 @@ graph_t *detection_handler(graph_t *graph)
 
    print_graph(graph);
    if (graph->params->level > VERBOSITY) {
-      fprintf(stderr, "Info: Detection for given time window finished, results available.\n");
+      fprintf(stderr, "Info: Detection for given interval finished, results available.\n");
    }
    return graph;
 
@@ -971,6 +981,7 @@ graph_t *parse_data(params_t *params)
    k = 0;
    cnt_flows = 0;
    status = 0;
+   window = 0;
    memset(buffer, 0, BUFFER_SIZE);
    tmp = buffer;
    graph = NULL;
@@ -1052,27 +1063,40 @@ graph_t *parse_data(params_t *params)
                   goto next;
                }
 
-               // Time window reached, starting detection.
-               if (flow.time_first >= graph->time_last) {
+               // Interval reached, starting detection.
+               if (flow.time_first >= graph->interval_last) {
                   if (graph->params->progress > 0) {
                      fprintf(stderr, "\n");
                   }
+                  // Shifting to the next interval.
+                  graph->interval_idx = (graph->interval_idx + 1) % array_max;
                   graph = detection_handler(graph);
                   if (graph == NULL) {
                      goto error;
                   }
-                  if (params->flush_cnt == params->flush_iter) {
-                     free_graph(graph);
-                     graph = create_graph(params);
-                     if (graph == NULL) {
-                        goto error;
+                  // Time window reached.
+                  if (flow.time_first >= graph->window_last) {
+                     window ++;
+                     // Cleaning graph.
+                     if (params->flush_cnt == params->flush_iter) {
+                        params->flush_cnt = 1;
+                        free_graph(graph);
+                        graph = create_graph(params);
+                        if (graph == NULL) {
+                           goto error;
+                        }
+                     } else {
+                        params->flush_cnt ++;
+                        graph->window_last = graph->window_last + params->time_window;
                      }
-                  } else {
-                     reset_graph(graph);
-                     params->flush_cnt ++;
                   }
-                  graph->time_first = flow.time_first;
-                  graph->time_last = flow.time_first + params->time_window;
+                  // Shifting beginning of window, if not first window.
+                  if (window != 0) {
+                     graph->window_first += params->interval;
+                  }
+                  reset_graph(graph);
+                  graph->interval_first = graph->interval_last;
+                  graph->interval_last = graph->interval_last + params->interval;
                }
 
                // Adding host structure to graph.
@@ -1117,6 +1141,7 @@ graph_t *parse_data(params_t *params)
       fprintf(stderr, "\n");
    }
    fprintf(stderr,"Info: All data have been successfully processed, processing residues.\n");
+   graph->interval_idx = (graph->interval_idx + 1) % array_max;
    graph = detection_handler(graph);
    if (graph == NULL) {
       goto error;
@@ -1139,6 +1164,7 @@ int main(int argc, char **argv)
    graph_t *graph;
 
    failure = 0;
+   graph = NULL;
 
    // Parsing input parameters.
    params = params_init(argc, argv);

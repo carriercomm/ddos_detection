@@ -62,8 +62,9 @@
  * \name Default values
  * Defines macros used by p2p botnet detector.
  * \{ */
-#define VERBOSITY 2 /*!< Default verbosity level. */
+#define VERBOSITY 1 /*!< Default verbosity level. */
 #define NUMBER_LEN 5 /*!< Maximal length of number for buffer. */
+#define ARRAY_EXTRA 4 /*!< Extra array size for a circle buffer. */
 #define PADDING 16 /*!< Padding width for log files. */
 
 #define PROTOCOL_TCP 6 /*!< TCP protocol number. */
@@ -79,13 +80,16 @@
 #define BITS_IP4 32 /*!< Number of bits in IPv4 address. */
 #define MASK_IP4 0x80000000 /*!< Mask number for 32 bit address. */
 
-#define FLUSH_ITER 0 /*< Default number of iteration after the graph is flushed. */
+#define FLUSH_ITER 0 /*!< Default number of iteration after the graph is flushed. */
+#define ARRAY_MIN 32 /*!< Minimum number of intervals. */
 #define INTERVAL 60 /*!< Default observation interval of SYN packets in seconds. */
+#define PORT_WINDOW 300 /*!< Default observation port scan window in seconds before flushing ports. */
 #define TIME_WINDOW 3600 /*!< Default observation time window defined in seconds. */
 
 #define CLUSTERS 2 /*!< Default number of clusters to be used in k-means algorithm. */
 
 #define DELIMITER ' ' /*!< Default delimiter for parsing CSV files. */
+#define FILE_FORMAT "%Y-%m-%d_%H-%M" /*!< Default file name in time format. */
 #define TIME_FORMAT "%a %b %d %Y %H:%M:%S" /*!< Default human readable time format. */
 #define DATA_FILE "/tmp/data.txt" /*!< Data file location used by gnuplot.*/
 #define GNUPLOT "/tmp/config.gpl" /*!< Gnuplot configuration file location.*/
@@ -98,10 +102,10 @@
  */
 enum verbose_level {
    VERBOSE_BRIEF = 1, /*!< Verbose level to print short brief information. */
-   VERBOSE_BASIC = 2, /*!< Verbose level to print basic information about local hosts. */
-   VERBOSE_ADVANCED = 3, /*!< Verbose level to print mutual contacts and edge weight of local host. */
-   VERBOSE_EXTRA = 4, /*!< Verbose level to print all external peers of local host. */
-   VERBOSE_FULL = 5 /*!< Verbose level to print and translate all external peers to domain name of local host. */
+   VERBOSE_BASIC = 2, /*!< Verbose level to print basic information about number of hosts and create plot of suspicious hosts. */
+   VERBOSE_ADVANCED = 3, /*!< Verbose level to print information about every host in the graph. */
+   VERBOSE_EXTRA = 4, /*!< Verbose level to print all data of every host, it can consume lot of disk memory. */
+   VERBOSE_FULL = 5 /*!< Verbose level to print and translate domain name of hosts. */
 };
 
 /*!
@@ -127,22 +131,26 @@ typedef struct node_t {
 } node_t;
 
 /*!
- * \brief Parameters structure
- * Structure of parameters containing default or set parameters during initialization
- * of module to be used in following functions.
+ * \brief Interval structure
+ * Structure of interval containing number of SYN packets in the given interval
+ * and information of assigned cluster to determine whether the traffic in the given
+ * interval is SYN flooding attack or not.
  */
-typedef struct params_t {
-   int mode; /*!< Flag which type of DDoS detection mode should be used. */
-   int clusters; /*!< Number of clusters to be used in k-means algorithm. */
-   int file_cnt; /*!< Counter for files with hosts statistics. */
-   int flush_cnt; /*!< Counter of flush iterations. */
-   int flush_iter; /*!< Number of iterations for flushing the graph. */
-   int progress; /*!< Parameter for printing dots of received flows. */
-   int level; /*!< Verbosity level for printing graph structure. */
-   int interval; /*!< Observation interval of SYN packets in seconds. */
-   int time_window; /*!< Observation time window in seconds. */
-   char *file; /*!< CSV file to be processed by the algorithm. */
-} params_t;
+typedef struct intvl_t {
+    //char cluster; /*!< Flag of assigned cluster. */
+    double syn_packets; /*!< Number of SYN packets. */
+} intvl_t;
+
+/*!
+ * \brief Port structure
+ * Structure of ports containing number of the destination port and times accesses
+ * to detect if the host was under vertical port scan attack or not.
+ */
+typedef struct port_t {
+    uint16_t port_num; /*!< Destination port number. */
+    uint32_t accesses; /*!< Number of times the given address has been accessed. */
+    struct port_t *next; /*!< Pointer to the next port. */
+} port_t;
 
 /*!
  * \brief Flow record structure
@@ -162,28 +170,6 @@ typedef struct flow_t {
 } flow_t;
 
 /*!
- * \brief Interval structure
- * Structure of interval containing number of SYN packets in the given interval
- * and information of assigned cluster to determine whether the traffic in the given
- * interval is SYN flooding attack or not.
- */
-typedef struct intvl_t {
-    char cluster; /*!< Flag of assigned cluster. */
-    double syn_packets; /*!< Number of SYN packets. */
-} intvl_t;
-
-/*!
- * \brief Port structure
- * Structure of ports containing number of the destination port and times accesses
- * to detect if the host was under vertical port scan attack or not.
- */
-typedef struct port_t {
-    uint16_t port_num; /*!< Destination port number. */
-    uint32_t accesses; /*!< Number of times the given address has been accessed. */
-    struct port_t *next; /*!< Pointer to the next port. */
-} port_t;
-
-/*!
  * \brief Local host structure.
  * Structure containing information about local host such as IP address and other
  * peers with whom was communicating during the given time period. It also contains
@@ -195,8 +181,26 @@ typedef struct host_t {
    uint32_t accesses; /*!< Number of times the given address has been accessed. */
    uint32_t ports_cnt; /*!< Number of different ports used to reach the given host. */
    struct intvl_t *intervals; /*!< Array of mutual contacts with same index as the pointers of the edges. */
-   struct port_t *ports; /*< Pointer to list of used ports structures. */
+   struct port_t *ports; /*!< Pointer to list of used ports structures. */
 } host_t;
+
+/*!
+ * \brief Parameters structure
+ * Structure of parameters containing default or set parameters during initialization
+ * of module to be used in following functions.
+ */
+typedef struct params_t {
+   int mode; /*!< Flag which type of DDoS detection mode should be used. */
+   int clusters; /*!< Number of clusters to be used in k-means algorithm. */
+   int flush_cnt; /*!< Counter of flush iterations. */
+   int flush_iter; /*!< Number of iterations for flushing the graph. */
+   int progress; /*!< Parameter for printing dots of received flows. */
+   int level; /*!< Verbosity level for printing graph structure. */
+   int interval; /*!< Observation interval of SYN packets in seconds. */
+   int time_window; /*!< Observation time window in seconds. */
+   char *file; /*!< CSV file to be processed by the algorithm. */
+} params_t;
+
 
 /*!
  * \brief Graph structure.
@@ -204,8 +208,12 @@ typedef struct host_t {
  * to be further examined.
  */
 typedef struct graph_t {
-   time_t time_first; /*!< Given Unix timestamp of the time window begging. */
-   time_t time_last; /*!< Calculated Unix timestamp of the time window end. */
+   uint16_t interval_idx; /*!< Index number of given interval. */
+   uint16_t interval_cnt; /*!< Number of reached intervals. */
+   time_t interval_first; /*!< Given Unix timestamp of the interval begging. */
+   time_t interval_last; /*!< Calculated Unix timestamp of the interval end. */
+   time_t window_first; /*!< Given Unix timestamp of the time window begging. */
+   time_t window_last; /*!< Calculated Unix timestamp of the time window end. */
    uint64_t hosts_cnt; /*!< Number of hosts determined by destination IP address in graph. */
    uint64_t hosts_max; /*!< Maximum number of hosts in graph. */
    struct params_t *params; /*!< Pointer to structure with all initialized parameters. */
@@ -343,9 +351,6 @@ void free_graph(graph_t *graph);
  * \param[in] graph Pointer to existing graph structure.
  */
 void reset_graph(graph_t *graph);
-
-
-void config_graph(graph_t *graph);
 
 /*!
  * \brief Statistics graph function.

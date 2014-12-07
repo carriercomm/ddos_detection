@@ -1,5 +1,6 @@
 *.txt
 doc/
+data/
 img/
 ddos_detection
 src/bin/
