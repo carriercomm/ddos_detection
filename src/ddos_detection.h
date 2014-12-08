@@ -2,9 +2,6 @@
  * \file ddos_detection.h
  * \brief Header file to DDoS detection system.
  * \author Jan Neuzil <neuzija1@fit.cvut.cz>
- * \author Alexandre Joubert <ajoubert@isep.fr>
- * \author Matthieu Caroy <mcaroy@isep.fr>
- * \author Boris Mineau <bmineau@isep.fr>
  * \date 2014
  */
 /*
@@ -49,18 +46,17 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
 #include <string.h>
 #include <time.h>
 #include <getopt.h>
+#include <netdb.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <netinet/in.h>
 #include <sys/wait.h>
 
 /*!
  * \name Default values
- * Defines macros used by p2p botnet detector.
+ * Defines macros used by DDoS detection program.
  * \{ */
 #define VERBOSITY 1 /*!< Default verbosity level. */
 #define NUMBER_LEN 5 /*!< Maximal length of number for buffer. */
@@ -73,10 +69,13 @@
 #define BUFFER_TMP 256 /*!< Size of a temporary buffer. */
 #define BUFFER_SIZE 8192 /*!< Size of a buffer for reading standard input. */
 
+#define PORTS_INIT 8 /*!< Init size of array with network ports. */
 #define HOSTS_INIT 32768 /*!< Init size of array with hosts. */
 
 #define ALL_PORTS 65535 /*!< Maximum number of network ports. */
 
+#define BITS_PORT 16 /*!< Number of bits in network port. */
+#define MASK_PORT 0x8000 /*!< Mask number for network port. */
 #define BITS_IP4 32 /*!< Number of bits in IPv4 address. */
 #define MASK_IP4 0x80000000 /*!< Mask number for 32 bit address. */
 
@@ -89,7 +88,7 @@
 #define CLUSTERS 2 /*!< Default number of clusters to be used in k-means algorithm. */
 
 #define DELIMITER ' ' /*!< Default delimiter for parsing CSV files. */
-#define FILE_FORMAT "%Y-%m-%d_%H-%M" /*!< Default file name in time format. */
+#define FILE_FORMAT "%Y-%m-%d_%H-%M-%S" /*!< Default file name in time format. */
 #define TIME_FORMAT "%a %b %d %Y %H:%M:%S" /*!< Default human readable time format. */
 #define DATA_FILE "/tmp/data.txt" /*!< Data file location used by gnuplot.*/
 #define GNUPLOT "/tmp/config.gpl" /*!< Gnuplot configuration file location.*/
@@ -127,7 +126,7 @@ enum mode {
 typedef struct node_t {
    struct node_t *left; /*!< Pointer to another node if result is 1. */
    struct node_t *right; /*!< Pointer to another node if result is 0. */
-   void *host; /*!< Pointer to host strcuture if node is a leaf. */
+   void *val; /*!< Pointer to value structure if node is a leaf. */
 } node_t;
 
 /*!
@@ -149,7 +148,6 @@ typedef struct intvl_t {
 typedef struct port_t {
     uint16_t port_num; /*!< Destination port number. */
     uint32_t accesses; /*!< Number of times the given address has been accessed. */
-    struct port_t *next; /*!< Pointer to the next port. */
 } port_t;
 
 /*!
@@ -179,9 +177,11 @@ typedef struct host_t {
    in_addr_t ip; /*!< IP address of the local host. */
    uint8_t stat; /*!< Host status for further examination. */
    uint32_t accesses; /*!< Number of times the given address has been accessed. */
-   uint32_t ports_cnt; /*!< Number of different ports used to reach the given host. */
+   uint16_t ports_cnt; /*!< Number of different ports used to reach the given host. */
+   uint16_t ports_max; /*!< Number of different ports used to reach the given host. */
+   struct node_t *root; /*!< Pointer to root of binary tree with all network ports. */
    struct intvl_t *intervals; /*!< Array of mutual contacts with same index as the pointers of the edges. */
-   struct port_t *ports; /*!< Pointer to list of used ports structures. */
+   struct port_t **ports; /*!< Pointer to array of used network ports structures. */
 } host_t;
 
 /*!
@@ -210,6 +210,7 @@ typedef struct params_t {
 typedef struct graph_t {
    uint16_t interval_idx; /*!< Index number of given interval. */
    uint16_t interval_cnt; /*!< Number of reached intervals. */
+   uint32_t window_cnt; /*!< Number of reached windows. */
    time_t interval_first; /*!< Given Unix timestamp of the interval begging. */
    time_t interval_last; /*!< Calculated Unix timestamp of the interval end. */
    time_t window_first; /*!< Given Unix timestamp of the time window begging. */
@@ -217,8 +218,8 @@ typedef struct graph_t {
    uint64_t hosts_cnt; /*!< Number of hosts determined by destination IP address in graph. */
    uint64_t hosts_max; /*!< Maximum number of hosts in graph. */
    struct params_t *params; /*!< Pointer to structure with all initialized parameters. */
-   struct node_t *root; /*!< Pointer to root of binary tree with all local IPv4 addresses. */
-   struct host_t **hosts; /*!< Pointer to array of hosts. */
+   struct node_t *root; /*!< Pointer to root of binary tree with all IPv4 addresses. */
+   struct host_t **hosts; /*!< Pointer to array of host structures. */
 } graph_t;
 
 /*!
@@ -253,30 +254,33 @@ char *get_token(char **string, int *len);
 int parse_line(graph_t *graph, flow_t *flow, char *line, int len);
 
 /*!
- * \brief Creating IPv4 host function.
- * Function to create or search IPv4 address node in binary tree.
- * \param[in] ip IPv4 address to add into binary tree.
- * \param[in] root Root of IPv4 binary tree.
+ * \brief Creating network port function.
+ * Function to create or search network port node in binary tree.
+ * \param[in] port Network port to add into binary tree.
+ * \param[in] root Root of port binary tree.
  * \return Pointer to belonging node on success, otherwise NULL.
  */
-node_t *create_node(in_addr_t ip, node_t *root);
-
-/*!
- * \brief Searching IPv4 host function.
- * Function to search IPv4 address in binary tree.
- * \param[in] ip IPv4 address to be searched in binary tree.
- * \param[in] root Root of IPv4 binary tree.
- * \return Pointer to belonging node on success, otherwise NULL.
- */
-node_t *search_node(in_addr_t ip, node_t *root);
+node_t *search_port(uint16_t port, node_t *root);
 
 /*!
  * \brief Cleaning function.
  * Function to free all allocated memory for binary tree structure
- * using recursion. At the end, it also free all associated local host structure.
+ * using recursion. At the end, it also free all associated port structure.
  * \param[in] node Node in binary tree to be deleted.
  */
-void delete_node(node_t *node);
+void delete_port(node_t *node);
+
+/*!
+ * \brief Adding port function.
+ * Function to add port to array of ports.
+ * It also reallocates the array if needed.
+ * \param[in,out] ports Array of pointers to the ports.
+ * \param[in] port Pointer to structure to be added to the array.
+ * \param[in,out] ports_cnt Number of ports in the array.
+ * \param[in,out] ports_max Maximum number of ports in the array.
+ * \return Pointer to array of ports on success, otherwise NULL.
+ */
+port_t **add_port(port_t **ports, port_t *port, uint16_t *ports_cnt, uint16_t *ports_max);
 
 /*!
  * \brief Allocating host function.
@@ -287,6 +291,23 @@ void delete_node(node_t *node);
  * \return Pointer to newly created host, otherwise NULL.
  */
 host_t *create_host(in_addr_t ip, int mode);
+
+/*!
+ * \brief Creating IPv4 host function.
+ * Function to create or search IPv4 address node in binary tree.
+ * \param[in] ip IPv4 address to add into binary tree.
+ * \param[in] root Root of IPv4 binary tree.
+ * \return Pointer to belonging node on success, otherwise NULL.
+ */
+node_t *search_host(in_addr_t ip, node_t *root);
+
+/*!
+ * \brief Cleaning function.
+ * Function to free all allocated memory for binary tree structure
+ * using recursion. At the end, it also free all associated host structure.
+ * \param[in] node Node in binary tree to be deleted.
+ */
+void delete_host(node_t *node);
 
 /*!
  * \brief Adding host function.

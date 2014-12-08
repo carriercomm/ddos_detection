@@ -1,6 +1,6 @@
-# Authors: Jan Neužil, Alexandre Joubert, Matthieu Caroy, Boris Mineau
-# Project: Matrix
-# jneuzil@isep.fr, ajoubert@isep.fr, mcarroy@isep.fr, bmineau@isep.fr
+# Authors: Jan Neužil
+# Project: DDoS Detection
+# jneuzil@isep.fr
 
 # Learning track project
 
