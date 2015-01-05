@@ -48,6 +48,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <math.h>
 #include <time.h>
 #include <getopt.h>
 #include <netdb.h>
@@ -56,7 +57,7 @@
 #include <sys/wait.h>
 
 /*!
- * \name Default values
+ * \name Default values.
  * Defines macros used by DDoS detection program.
  * \{ */
 #define VERBOSITY 1 /*!< Default verbosity level. */
@@ -87,6 +88,8 @@
 #define TIME_WINDOW 3600 /*!< Default observation time window defined in seconds. */
 
 #define CLUSTERS 2 /*!< Default number of clusters to be used in k-means algorithm. */
+#define OBSERVATIONS 2 /*!< Default minumum number of observations in the cluster. */
+#define square(x) ((x) * (x)) /*!< Square function used in k-means algorithm. */
 
 #define DELIMITER ' ' /*!< Default delimiter for parsing CSV files. */
 #define FILE_FORMAT "%Y-%m-%d_%H-%M-%S" /*!< Default file name in time format. */
@@ -97,10 +100,10 @@
 /*! \} */
 
 /*!
- * \brief Mode enumeration.
+ * \brief Detection mode enumeration.
  * Mode type of the DDoS detection.
  */
-enum mode {
+enum detection_mode {
    MODE_SYN_FLOODING = 0x01, /*!< SYN flooding detection mode. */
    MODE_PORTSCAN_VER = 0x02, /*!< Portscan detection mode. */
    MODE_PORTSCAN_HOR = 0x04, /*!< Portscan detection mode. */
@@ -120,6 +123,15 @@ enum verbose_level {
 };
 
 /*!
+ * \brief Examination level enumaration.
+ * Level mode of host examination to get more precise data about the host.
+ */
+enum host_level {
+    LEVEL_INFO = 1, /*!< Basic examination level to inspect only briefly the given host. */
+    LEVEL_TRACE = 2 /*!< Extra examination level to inspect also the ports of given host. */
+};
+
+/*!
  * \brief Binary tree structure.
  * Structure containing pointers to left and right whether the bit
  * is 0 or 1, leafs also contains pointer to host structure.
@@ -131,7 +143,7 @@ typedef struct node {
 } node_t;
 
 /*!
- * \brief Interval structure
+ * \brief Interval structure.
  * Structure of interval containing number of SYN packets in the given interval
  * and information of assigned cluster to determine whether the traffic in the given
  * interval is SYN flooding attack or not.
@@ -142,7 +154,7 @@ typedef struct intvl {
 } intvl_t;
 
 /*!
- * \brief Port structure
+ * \brief Port structure.
  * Structure of ports containing number of the destination port and times accesses
  * to detect if the host was under vertical port scan attack or not.
  */
@@ -150,6 +162,29 @@ typedef struct port {
     uint16_t port_num; /*!< Destination port number. */
     uint32_t accesses; /*!< Number of times the given address has been accessed. */
 } port_t;
+
+/*!
+ * \brief Extra structure.
+ * Extra host structure with additional information about the given host such as binary
+ * tree of all ports that have been accessed.
+ */
+typedef struct extra {
+   uint16_t ports_cnt; /*!< Number of different ports used to reach the given host. */
+   uint16_t ports_max; /*!< Number of different ports used to reach the given host. */
+   node_t *root; /*!< Pointer to root of binary tree with all network ports. */
+   port_t **ports; /*!< Pointer to array of used network ports structures. */
+} extra_t;
+
+/*!
+ * \brief Cluster structure.
+ * Cluster structure to keep information about number of host in the given structure
+ * and centroid coordinates.
+ */
+typedef struct cluster {
+   double dev; /*!< Sums of squared deviations of the cluster. */
+   uint64_t hosts_cnt; /*!< Number of hosts in the given cluster. */
+   intvl_t *centroid; /*!< Centroid coordinates of the given cluster. */
+} cluster_t;
 
 /*!
  * \brief Local host structure.
@@ -160,16 +195,16 @@ typedef struct port {
 typedef struct host {
    in_addr_t ip; /*!< IP address of the local host. */
    uint8_t stat; /*!< Host status for further examination. */
+   uint8_t level; /*!< Host examination level. */
+   uint8_t cluster; /*!< Assigned cluster to the host. */
+   double distance; /*!< Distance to the nearest centroid. */
    uint32_t accesses; /*!< Number of times the given address has been accessed. */
-   uint16_t ports_cnt; /*!< Number of different ports used to reach the given host. */
-   uint16_t ports_max; /*!< Number of different ports used to reach the given host. */
-   node_t *root; /*!< Pointer to root of binary tree with all network ports. */
-   intvl_t *intervals; /*!< Array of mutual contacts with same index as the pointers of the edges. */
-   port_t **ports; /*!< Pointer to array of used network ports structures. */
+   intvl_t *intervals; /*!< Array of SYN packets number in the given interval. */
+   extra_t *extra; /*!< Pointer to extra information about the host. */
 } host_t;
 
 /*!
- * \brief Parameters structure
+ * \brief Parameters structure.
  * Structure of parameters containing default or set parameters during initialization
  * of module to be used in following functions.
  */
@@ -189,7 +224,7 @@ typedef struct params {
 } params_t;
 
 /*!
- * \brief Flow record structure
+ * \brief Flow record structure.
  * Structure containing all fields of a flow record.
  */
 typedef struct flow {
@@ -211,9 +246,11 @@ typedef struct flow {
  * to be further examined.
  */
 typedef struct graph {
+   uint8_t host_level; /*!< Flag to identify host examination level. */
    uint16_t interval_idx; /*!< Index number of given interval. */
    uint16_t interval_cnt; /*!< Number of reached intervals. */
    uint32_t window_cnt; /*!< Number of reached windows before flushing the graph. */
+   uint32_t ports[ALL_PORTS]; /*!< Array of all ports and number of accesses in the given interval. */
    time_t interval_first; /*!< Given Unix timestamp of the interval begging. */
    time_t interval_last; /*!< Calculated Unix timestamp of the interval end. */
    time_t window_first; /*!< Given Unix timestamp of the time window begging. */
@@ -223,6 +260,7 @@ typedef struct graph {
    params_t *params; /*!< Pointer to structure with all initialized parameters. */
    node_t *root; /*!< Pointer to root of binary tree with all IPv4 addresses. */
    host_t **hosts; /*!< Pointer to array of host structures. */
+   cluster_t **clusters; /*!< Pointer to array of cluster structures. */
 } graph_t;
 
 /*!

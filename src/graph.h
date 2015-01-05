@@ -12,6 +12,7 @@
 #define _GRAPH_
 
 #include "host.h"
+#include "cluster.h"
 
 /*!
  * \brief Allocating graph function.

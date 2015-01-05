@@ -61,16 +61,16 @@ node_t *search_port(uint16_t port, node_t *root)
    return node;
 }
 
-void delete_port(node_t *node)
+void free_port(node_t *node)
 {
    // Deleting siblings to the left if exist.
    if (node->left != NULL) {
-      delete_port(node->left);
+      free_port(node->left);
    }
 
    // Deleting siblings to the right if exist.
    if (node->right != NULL) {
-      delete_port(node->right);
+      free_port(node->right);
    }
 
    // Deleting host structure if exists.
@@ -104,6 +104,47 @@ port_t **add_port(port_t **ports, port_t *port, uint16_t *ports_cnt, uint16_t *p
    return ports;
 }
 
+extra_t *create_extra()
+{
+   extra_t *extra;
+
+   extra = (extra_t *) calloc(1, sizeof(extra_t));
+   if (extra == NULL) {
+       fprintf(stderr, "Error: Not enough memory for extra host structure.\n");
+       goto error;
+   }
+
+   extra->ports_cnt = 0;
+   extra->ports_max = PORTS_INIT;
+   extra->root = NULL;
+   extra->ports = NULL;
+
+   extra->root = (node_t *) calloc(1, sizeof(node_t));
+   if (extra->root == NULL) {
+      fprintf(stderr, "Error: Not enough memory for node structure.\n");
+      goto error;
+   }
+   extra->root->left = NULL;
+   extra->root->right = NULL;
+   extra->ports = (port_t **) calloc(extra->ports_max, sizeof(port_t *));
+   if (extra->ports == NULL) {
+      fprintf(stderr, "Error: Not enough memory for ports array.\n");
+      goto error;
+   }
+
+    error:
+      if (extra->root != NULL) {
+         free(extra->root);
+      }
+      if (extra->ports != NULL) {
+         free(extra->ports);
+      }
+      if (extra != NULL) {
+         free(extra);
+      }
+      return NULL;
+}
+
 host_t *create_host(in_addr_t ip, int mode, int array_max)
 {
    host_t *host;
@@ -115,12 +156,11 @@ host_t *create_host(in_addr_t ip, int mode, int array_max)
    }
    host->ip = ip;
    host->stat = 1;
+   host->level = LEVEL_INFO;
+   host->cluster = 0;
+   host->distance = 0.0;
    host->accesses = 1;
-   host->ports_cnt = 0;
-   host->ports_max = PORTS_INIT;
-   host->root = NULL;
    host->intervals = NULL;
-   host->ports = NULL;
 
    if ((mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
       host->intervals = (intvl_t *) calloc(array_max, sizeof(intvl_t));
@@ -129,30 +169,11 @@ host_t *create_host(in_addr_t ip, int mode, int array_max)
           goto error;
       }
    }
-
-   if ((mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) {
-      host->root = (node_t *) calloc(1, sizeof(node_t));
-      if (host->root == NULL) {
-         fprintf(stderr, "Error: Not enough memory for node structure.\n");
-         goto error;
-      }
-      host->ports = (port_t **) calloc(host->ports_max, sizeof(port_t *));
-      if (host->ports == NULL) {
-         fprintf(stderr, "Error: Not enough memory for ports array.\n");
-         goto error;
-      }
-   }
    return host;
 
    error:
       if (host->intervals != NULL) {
          free(host->intervals);
-      }
-      if (host->root != NULL) {
-         free(host->root);
-      }
-      if (host->ports != NULL) {
-         free(host->ports);
       }
       if (host != NULL) {
          free(host);
@@ -211,16 +232,16 @@ node_t *search_host(in_addr_t ip, node_t *root)
    return node;
 }
 
-void delete_host(node_t *node)
+void free_host(node_t *node)
 {
    // Deleting siblings to the left if exist.
    if (node->left != NULL) {
-      delete_host(node->left);
+      free_host(node->left);
    }
 
    // Deleting siblings to the right if exist.
    if (node->right != NULL) {
-      delete_host(node->right);
+      free_host(node->right);
    }
 
    // Deleting host structure if exists.
@@ -229,11 +250,14 @@ void delete_host(node_t *node)
       if (host->intervals != NULL) {
          free(host->intervals);
       }
-      if (host->root != NULL) {
-         delete_port(host->root);
-      }
-      if (host->ports != NULL) {
-         free(host->ports);
+      if (host->extra != NULL) {
+         if (host->extra->root != NULL) {
+            free_port(host->extra->root);
+         }
+         if (host->extra->ports != NULL) {
+            free(host->extra->ports);
+         }
+         free(host->extra);
       }
       free(host);
    }
@@ -330,32 +354,34 @@ graph_t *get_host(graph_t *graph, flow_t *flow)
    }
 
    // Completing data of ports.
-   if ((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) {
-         // Finding port with destination port number.
-         node = search_port(flow->dst_port, host->root);
-
-         // Creating new port with destination port number if not present.
-         if (node->val == NULL) {
-            port = (port_t *) calloc(1, sizeof(port_t));
-            if (port == NULL) {
-               fprintf(stderr, "Error: Not enough memory for port structure.\n");
-               goto error;
-            }
-            node->val = port;
-            port->port_num = flow->dst_port;
-            port->accesses = 1;
-            host->ports = add_port(host->ports, port, &(host->ports_cnt), &(host->ports_max));
-            if (host->ports == NULL) {
-               goto error;
-            }
-         } else {
-            port = (port_t *) node->val;
-            port->accesses ++;
-         }
+   if (((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) || ((graph->params->mode & MODE_PORTSCAN_HOR) == MODE_PORTSCAN_HOR)) {
+      // Adding simple information about port scan attacks.
+      graph->ports[flow->dst_port] ++;
    }
 
-   if ((graph->params->mode & MODE_PORTSCAN_HOR) == MODE_PORTSCAN_HOR) {
-      fprintf(stderr, "To be completed.\n");
+   // Adding additional information about host.
+   if (host->stat == LEVEL_TRACE) {
+      // Finding port with destination port number.
+      node = search_port(flow->dst_port, host->extra->root);
+
+      // Creating new port with destination port number if not present.
+      if (node->val == NULL) {
+         port = (port_t *) calloc(1, sizeof(port_t));
+         if (port == NULL) {
+            fprintf(stderr, "Error: Not enough memory for port structure.\n");
+            goto error;
+         }
+         node->val = port;
+         port->port_num = flow->dst_port;
+         port->accesses = 1;
+         host->extra->ports = add_port(host->extra->ports, port, &(host->extra->ports_cnt), &(host->extra->ports_max));
+         if (host->extra->ports == NULL) {
+            goto error;
+         }
+      } else {
+         port = (port_t *) node->val;
+         port->accesses ++;
+      }
    }
 
    return graph;
@@ -431,16 +457,16 @@ void print_host(graph_t *graph, int idx, int mode)
                  "set xrange [0:%d]\n"
                  "set output \"res/%s_SYN_w%d_t%02d.png\"\n"
                  "plot \"%s\" using 1:2 with line\n",
-              graph->params->intvl_max - ARRAY_EXTRA - 1, ip, graph->params->window_sum, 
+              graph->params->intvl_max - ARRAY_EXTRA - 1, ip, graph->params->window_sum,
               (graph->interval_idx - 1 + (graph->window_cnt * ARRAY_EXTRA)) % graph->params->intvl_max, DATA_FILE);
       fclose(g);
    }
 
-   else if (mode == MODE_PORTSCAN_VER) {
+   else if (mode == MODE_PORTSCAN_VER || mode == MODE_PORTSCAN_HOR) {
       // Storing vertical port scan data.
-      for (i = 0; i < graph->hosts[idx]->ports_cnt; i ++) {
-         if (graph->hosts[idx]->ports[i]->accesses > 0) {
-            fprintf(f, "%d %u\n", graph->hosts[idx]->ports[i]->port_num, graph->hosts[idx]->ports[i]->accesses);
+      for (i = 0; i < graph->hosts[idx]->extra->ports_cnt; i ++) {
+         if (graph->hosts[idx]->extra->ports[i]->accesses > 0) {
+            fprintf(f, "%d %u\n", graph->hosts[idx]->extra->ports[i]->port_num, graph->hosts[idx]->extra->ports[i]->accesses);
          }
       }
       fclose(f);
@@ -452,7 +478,7 @@ void print_host(graph_t *graph, int idx, int mode)
                  "set y2label \"# Accesses\"\n"
                  "set output \"res/%s_VPS_w%d_t%02d.png\"\n"
                  "plot \"%s\" using 1:2\n",
-              ALL_PORTS, ip, graph->params->window_sum, 
+              ALL_PORTS, ip, graph->params->window_sum,
               (graph->interval_idx - 1 + (graph->window_cnt * ARRAY_EXTRA)) % graph->params->intvl_max, DATA_FILE);
       fclose(g);
    }

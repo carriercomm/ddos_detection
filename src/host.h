@@ -27,9 +27,9 @@ node_t *search_port(uint16_t port, node_t *root);
  * \brief Cleaning function.
  * Function to free all allocated memory for binary tree structure
  * using recursion. At the end, it also free all associated port structure.
- * \param[in] node Node in binary tree to be deleted.
+ * \param[in] node Node in binary tree to be freed.
  */
-void delete_port(node_t *node);
+void free_port(node_t *node);
 
 /*!
  * \brief Adding port function.
@@ -42,6 +42,14 @@ void delete_port(node_t *node);
  * \return Pointer to array of ports on success, otherwise NULL.
  */
 port_t **add_port(port_t **ports, port_t *port, uint16_t *ports_cnt, uint16_t *ports_max);
+
+/*!
+ \brief Allocating extra function
+ * Function to allocate new extra information structure to a given host
+ * and return a pointer to the allocated structure.
+ * \return Pointer to newly created structure, otherwise NULL.
+ */
+extra_t *create_extra();
 
 /*!
  * \brief Allocating host function.
@@ -67,9 +75,9 @@ node_t *search_host(in_addr_t ip, node_t *root);
  * \brief Cleaning function.
  * Function to free all allocated memory for binary tree structure
  * using recursion. At the end, it also free all associated host structure.
- * \param[in] node Node in binary tree to be deleted.
+ * \param[in] node Node in binary tree to be freed.
  */
-void delete_host(node_t *node);
+void free_host(node_t *node);
 
 /*!
  * \brief Adding host function.

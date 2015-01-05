@@ -187,6 +187,10 @@ int parse_line(graph_t *graph, flow_t *flow, char *line, int len)
       return EXIT_FAILURE;
    }
    flow->dst_port = atoi(dst_port);
+   if (flow->dst_port < 0 || flow->dst_port > ALL_PORTS) {
+      fprintf(stderr, "Warning: Invalid destination port number, parsing interrupted.\n");
+      return EXIT_FAILURE;
+   }
 
    src_port = parse_token(&line, &len);
    if (src_port == NULL) {
@@ -194,6 +198,10 @@ int parse_line(graph_t *graph, flow_t *flow, char *line, int len)
       return EXIT_FAILURE;
    }
    flow->src_port = atoi(src_port);
+   if (flow->dst_port < 0 || flow->dst_port > ALL_PORTS) {
+      fprintf(stderr, "Warning: Invalid source port number, parsing interrupted.\n");
+      return EXIT_FAILURE;
+   }
 
    protocol = parse_token(&line, &len);
    if (protocol == NULL) {
@@ -357,7 +365,7 @@ graph_t *parse_data(params_t *params)
                   }
                   // Shifting to the next interval.
                   graph->interval_idx = (graph->interval_idx + 1) % graph->params->intvl_max;
-                  graph = detection_handler(graph);
+                  //graph = parse_detection(graph);
                   if (graph == NULL) {
                      goto error;
                   }
@@ -437,11 +445,52 @@ graph_t *parse_data(params_t *params)
    }
    fprintf(stderr,"Info: All data have been successfully processed, processing residues.\n");
    graph->interval_idx = (graph->interval_idx + 1) % graph->params->intvl_max;
-   graph = detection_handler(graph);
+   graph = parse_detection(graph);
    if (graph == NULL) {
       goto error;
    }
 
+   return graph;
+
+   // Cleaning up after error.
+   error:
+      if (graph != NULL) {
+         free_graph(graph);
+      }
+      return NULL;
+}
+
+graph_t *parse_detection(graph_t *graph)
+{
+   if ((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
+      if (graph->params->level > VERBOSITY) {
+         fprintf(stderr, "Info: Starting SYN flooding detection.\n");
+      }
+      if ((graph = assign_cluster(graph)) == NULL) {
+         goto error;
+      }
+   }
+
+   if ((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) {
+      if (graph->params->level > VERBOSITY) {
+         fprintf(stderr, "Info: Starting vertical port scan detection.\n");
+      }
+      // TODO Implement detection technique
+      // graph = detect_ver_portscan(graph);
+   }
+
+   if ((graph->params->mode & MODE_PORTSCAN_HOR) == MODE_PORTSCAN_HOR) {
+      if (graph->params->level > VERBOSITY) {
+         fprintf(stderr, "Info: Starting horizontal port scan detection.\n");
+      }
+      // TODO Implement detection technique
+      // graph = detect_hor_portscan(graph);
+   }
+
+   print_graph(graph);
+   if (graph->params->level > VERBOSITY) {
+      fprintf(stderr, "Info: Detection for given interval finished, results available.\n");
+   }
    return graph;
 
    // Cleaning up after error.
