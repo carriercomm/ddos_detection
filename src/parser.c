@@ -10,6 +10,25 @@
 
 #include "parser.h"
 
+static uint16_t known_ports[KNOWN_PORTS] = {
+   20, // FTP
+   21, // FTP
+   22, // SSH
+   23, // Telnet
+   25, // SMTP
+   53, // DNS
+   80, // HTTP
+   110, // POP3
+   143, // IMAP
+   161, // SNMP
+   443, // HTTPS
+   3389, // RDP
+   4949, // Munin
+   5800, // VNC
+   5900, // VNC
+   10050 // Zabbix
+}; /*!< List of well known ports. */
+
 params_t *parse_params(int argc, char **argv)
 {
    char *description, opt, usage[BUFFER_TMP], tmp[BUFFER_TMP];
@@ -31,7 +50,7 @@ params_t *parse_params(int argc, char **argv)
       "   1) SYN flooding detection only.\n"
       "   2) Vertical port scanning detection only.\n"
       "   3) SYN flooding and vertical port scanning detection.\n"
-      "   4) Vertical port scanning detection only.\n"
+      "   4) Horizontal port scanning detection only.\n"
       "   5) SYN flooding and horizontal port scanning detection.\n"
       "   6) Vertical and horizontal port scanning detection.\n"
       "   7) All detections combined.\n";
@@ -43,7 +62,7 @@ params_t *parse_params(int argc, char **argv)
       return NULL;
    }
 
-   params->mode = MODE_SYN_FLOODING;
+   params->mode = SYN_FLOODING;
    params->clusters = CLUSTERS;
    params->flush_cnt = 1;
    params->flush_iter = FLUSH_ITER;
@@ -51,8 +70,9 @@ params_t *parse_params(int argc, char **argv)
    params->level = VERBOSITY;
    params->interval = INTERVAL;
    params->time_window = TIME_WINDOW;
-   params->file = NULL;
    params->window_sum = 0;
+   params->file = NULL;
+   params->name = NULL;
 
    snprintf(usage, BUFFER_TMP, "Usage: %s [OPTION]...\nTry `%s -h' for more information.\n", argv[0], argv[0]);
 
@@ -281,7 +301,7 @@ graph_t *parse_data(params_t *params)
    tmp = buffer;
    graph = NULL;
 
-   if (params->mode > MODE_ALL) {
+   if (params->mode > ALL_ATTACKS) {
       fprintf(stderr, "Error: Unknown detection mode.\n");
       goto error;
    }
@@ -365,7 +385,7 @@ graph_t *parse_data(params_t *params)
                   }
                   // Shifting to the next interval.
                   graph->interval_idx = (graph->interval_idx + 1) % graph->params->intvl_max;
-                  //graph = parse_detection(graph);
+                  graph = parse_detection(graph);
                   if (graph == NULL) {
                      goto error;
                   }
@@ -462,29 +482,59 @@ graph_t *parse_data(params_t *params)
 
 graph_t *parse_detection(graph_t *graph)
 {
-   if ((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
+   char flag;
+   int i, j;
+
+   if ((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) {
       if (graph->params->level > VERBOSITY) {
          fprintf(stderr, "Info: Starting SYN flooding detection.\n");
       }
-      if ((graph = assign_cluster(graph)) == NULL) {
-         goto error;
+      if (graph->window_cnt != 0) {
+         if ((graph = assign_cluster(graph)) == NULL) {
+            goto error;
+         }
       }
    }
 
-   if ((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) {
+   if ((graph->params->mode & VER_PORTSCAN) == VER_PORTSCAN) {
       if (graph->params->level > VERBOSITY) {
          fprintf(stderr, "Info: Starting vertical port scan detection.\n");
       }
-      // TODO Implement detection technique
-      // graph = detect_ver_portscan(graph);
+      for (i = 0; i < ALL_PORTS; i ++) {
+         if (graph->ports[i].accesses > 0) {
+            graph->ports_ver ++;
+         }
+      }
+      if (graph->ports_ver > VERTICAL_THRESHOLD) {
+         graph->attack += VER_PORTSCAN;
+         fprintf(stderr, "Warning: Vertical port scan attack detected!\n");
+      }
    }
 
-   if ((graph->params->mode & MODE_PORTSCAN_HOR) == MODE_PORTSCAN_HOR) {
+   if ((graph->params->mode & HOR_PORTSCAN) == HOR_PORTSCAN) {
       if (graph->params->level > VERBOSITY) {
          fprintf(stderr, "Info: Starting horizontal port scan detection.\n");
       }
-      // TODO Implement detection technique
-      // graph = detect_hor_portscan(graph);
+      qsort(graph->ports, ALL_PORTS, sizeof(port_t), compare_port);
+      for (i = 0; i < ALL_PORTS; i ++) {
+         flag = 0;
+         for (j = 0; j < KNOWN_PORTS; j ++) {
+            if (graph->ports[i].port_num == known_ports[j]) {
+               flag = 1;
+               break;
+            }
+         }
+
+         // Non well-known port found among the highest accesses values.
+         if (flag == 0) {
+            graph->ports_hor = graph->ports[i].accesses;
+            break;
+         }
+      }
+      if (graph->ports_hor > HORIZONTAL_THRESHOLD) {
+         graph->attack += HOR_PORTSCAN;
+         fprintf(stderr, "Warning: Horizontal port scan attack detected!\n");
+      }
    }
 
    print_graph(graph);

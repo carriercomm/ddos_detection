@@ -10,6 +10,16 @@
 
 #include "host.h"
 
+void reset_port(port_t ports[ALL_PORTS])
+{
+   int i;
+
+   for (i = 0; i < ALL_PORTS; i ++) {
+      ports[i].accesses = 0;
+      ports[i].port_num = i;
+   }
+}
+
 node_t *search_port(uint16_t port, node_t *root)
 {
    int i;
@@ -104,6 +114,15 @@ port_t **add_port(port_t **ports, port_t *port, uint16_t *ports_cnt, uint16_t *p
    return ports;
 }
 
+int compare_port(const void *elem1, const void *elem2)
+{
+   port_t *port1, *port2;
+
+   port1 = (port_t *) elem1;
+   port2 = (port_t *) elem2;
+   return (port2->accesses - port1->accesses);
+}
+
 extra_t *create_extra()
 {
    extra_t *extra;
@@ -132,7 +151,7 @@ extra_t *create_extra()
       goto error;
    }
 
-    error:
+   error:
       if (extra->root != NULL) {
          free(extra->root);
       }
@@ -161,8 +180,9 @@ host_t *create_host(in_addr_t ip, int mode, int array_max)
    host->distance = 0.0;
    host->accesses = 1;
    host->intervals = NULL;
+   host->extra = NULL;
 
-   if ((mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
+   if ((mode & SYN_FLOODING) == SYN_FLOODING) {
       host->intervals = (intvl_t *) calloc(array_max, sizeof(intvl_t));
       if (host->intervals == NULL) {
           fprintf(stderr, "Error: Not enough memory for host structure.\n");
@@ -298,7 +318,7 @@ graph_t *get_host(graph_t *graph, flow_t *flow)
    host_t *host;
    port_t *port;
 
-   if (graph->params->mode == MODE_SYN_FLOODING && flow->syn_flag != 1) {
+   if (graph->params->mode == SYN_FLOODING && flow->syn_flag != 1) {
       // SYN flag is not set, skipping line.
       return graph;
    }
@@ -324,7 +344,7 @@ graph_t *get_host(graph_t *graph, flow_t *flow)
    }
 
    // Completing data of ports.
-   if ((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
+   if ((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) {
 
       // Adding all SYN packets in the same interval.
       if (flow->time_last < graph->interval_last) {
@@ -354,9 +374,9 @@ graph_t *get_host(graph_t *graph, flow_t *flow)
    }
 
    // Completing data of ports.
-   if (((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) || ((graph->params->mode & MODE_PORTSCAN_HOR) == MODE_PORTSCAN_HOR)) {
+   if (((graph->params->mode & VER_PORTSCAN) == VER_PORTSCAN) || ((graph->params->mode & HOR_PORTSCAN) == HOR_PORTSCAN)) {
       // Adding simple information about port scan attacks.
-      graph->ports[flow->dst_port] ++;
+      graph->ports[flow->dst_port].accesses ++;
    }
 
    // Adding additional information about host.
@@ -424,7 +444,11 @@ void print_host(graph_t *graph, int idx, int mode)
    }
 
    // Configuring gnuplot configuration file.
-   time = localtime(&(graph->window_first));
+   if (mode == SYN_FLOODING) {
+      time = localtime(&(graph->window_first));
+   } else {
+      time = localtime(&(graph->interval_first));
+   }
    if (time == NULL) {
       fprintf(stderr, "Warning: Cannot convert UNIX timestamp, plot omitted.\n");
       return;
@@ -433,12 +457,9 @@ void print_host(graph_t *graph, int idx, int mode)
       fprintf(stderr, "Warning: Cannot convert UNIX timestamp, plot omitted.\n");
       return;
    }
-   inet_ntop(AF_INET, &(graph->hosts[idx]->ip), ip, INET_ADDRSTRLEN);
-   fprintf(g, "set terminal pngcairo font \",8\" enhanced\n"
-              "set title \"Destination address: %s\\nTime first: %s\"\n"
-              "unset key\n", ip, buffer);
+   fprintf(g, "set terminal pngcairo font \",8\" enhanced\nunset key\n");
 
-   if (mode == MODE_SYN_FLOODING) {
+   if (mode == SYN_FLOODING) {
       // Storing SYN flooding data.
       if (graph->window_cnt == 0) {
          for (i = 0; i < graph->interval_idx; i ++) {
@@ -450,19 +471,64 @@ void print_host(graph_t *graph, int idx, int mode)
          }
       }
       fclose(f);
-
-      fprintf(g, "set xlabel \"Time interval\"\n"
+      inet_ntop(AF_INET, &(graph->hosts[idx]->ip), ip, INET_ADDRSTRLEN);
+      fprintf(g, "set title \"Destination address: %s\\nTime first: %s\"\n"
+                 "set xlabel \"Time interval\"\n"
                  "set ylabel \"# SYN packets\"\n"
                  "set y2label \"# SYN packets\"\n"
                  "set xrange [0:%d]\n"
-                 "set output \"res/%s_SYN_w%d_t%02d.png\"\n"
+                 "set output \"res/%s_SYN_w%d_t%02d_%s.png\"\n"
                  "plot \"%s\" using 1:2 with line\n",
-              graph->params->intvl_max - ARRAY_EXTRA - 1, ip, graph->params->window_sum,
+              ip, buffer, graph->params->intvl_max - ARRAY_EXTRA - 1, graph->params->name, graph->params->window_sum,
+              (graph->interval_idx - 1 + (graph->window_cnt * ARRAY_EXTRA)) % graph->params->intvl_max, ip, DATA_FILE);
+      fclose(g);
+   }
+   
+   else if (mode == VER_PORTSCAN) {
+      // Storing port scan data.
+      for (i = 0; i < ALL_PORTS; i ++) {
+         if (graph->ports[i].accesses > 0) {
+            fprintf(f, "%d %u\n", graph->ports[i].port_num, graph->ports[i].accesses);
+         }
+      }
+      fclose(f);
+
+      fprintf(g, "set title \"Number of ports used: %d\\nTime first: %s\"\n"
+                 "set xlabel \"Destination port\"\n"
+                 "set xrange [0:%d]\n"
+                 "set yrange [0:]\n"
+                 "set ylabel \"# Accesses\"\n"
+                 "set y2label \"# Accesses\"\n"
+                 "set output \"res/%s_VPS_w%d_t%02d.png\"\n"
+                 "plot \"%s\" using 1:2\n",
+              graph->ports_ver, buffer, ALL_PORTS, graph->params->name, graph->params->window_sum,
               (graph->interval_idx - 1 + (graph->window_cnt * ARRAY_EXTRA)) % graph->params->intvl_max, DATA_FILE);
       fclose(g);
    }
 
-   else if (mode == MODE_PORTSCAN_VER || mode == MODE_PORTSCAN_HOR) {
+   else if (mode == HOR_PORTSCAN) {
+      // Storing port scan data.
+      for (i = 0; i < TOP_ACCESSED; i ++) {
+         if (graph->ports[i].accesses > 0) {
+            fprintf(f, "%d %u\n", graph->ports[i].port_num, graph->ports[i].accesses);
+         }
+      }
+      fclose(f);
+
+      fprintf(g, "set title \"Maximum port accesses: %u\\nTime first: %s\"\n"
+                 "set xlabel \"Destination port\"\n"
+                 "set xrange [0:%d]\n"
+                 "set yrange [0:]\n"
+                 "set ylabel \"# Accesses\"\n"
+                 "set y2label \"# Accesses\"\n"
+                 "set output \"res/%s_HPS_w%d_t%02d.png\"\n"
+                 "plot \"%s\" using 1:2\n",
+              graph->ports_hor, buffer, ALL_PORTS, graph->params->name, graph->params->window_sum,
+              (graph->interval_idx - 1 + (graph->window_cnt * ARRAY_EXTRA)) % graph->params->intvl_max, DATA_FILE);
+      fclose(g);
+   }
+
+   else if (mode == ALL_ATTACKS) {
       // Storing vertical port scan data.
       for (i = 0; i < graph->hosts[idx]->extra->ports_cnt; i ++) {
          if (graph->hosts[idx]->extra->ports[i]->accesses > 0) {
@@ -470,16 +536,17 @@ void print_host(graph_t *graph, int idx, int mode)
          }
       }
       fclose(f);
-
-      fprintf(g, "set xlabel \"Destination port\"\n"
+      inet_ntop(AF_INET, &(graph->hosts[idx]->ip), ip, INET_ADDRSTRLEN);
+      fprintf(g, "set title \"Destination address: %s\\nTime first: %s\"\n"
+                 "set xlabel \"Destination port\"\n"
                  "set xrange [0:%d]\n"
                  "set yrange [0:]\n"
                  "set ylabel \"# Accesses\"\n"
                  "set y2label \"# Accesses\"\n"
-                 "set output \"res/%s_VPS_w%d_t%02d.png\"\n"
+                 "set output \"res/%s_VPS_w%d_t%02d_%s.png\"\n"
                  "plot \"%s\" using 1:2\n",
-              ALL_PORTS, ip, graph->params->window_sum,
-              (graph->interval_idx - 1 + (graph->window_cnt * ARRAY_EXTRA)) % graph->params->intvl_max, DATA_FILE);
+              ip, buffer, ALL_PORTS, graph->params->name, graph->params->window_sum,
+              (graph->interval_idx - 1 + (graph->window_cnt * ARRAY_EXTRA)) % graph->params->intvl_max, ip, DATA_FILE);
       fclose(g);
    }
 

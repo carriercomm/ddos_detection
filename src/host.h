@@ -15,6 +15,13 @@
 #include "graph.h"
 
 /*!
+ * \brief Reseting ports function
+ * Function to reset port array of structures after the array has been sorted.
+ * \param[in,out] ports Pointer to existing port array of structures.
+ */
+void reset_port(port_t ports[ALL_PORTS]);
+
+/*!
  * \brief Creating network port function.
  * Function to create or search network port node in binary tree.
  * \param[in] port Network port to add into binary tree.
@@ -42,6 +49,15 @@ void free_port(node_t *node);
  * \return Pointer to array of ports on success, otherwise NULL.
  */
 port_t **add_port(port_t **ports, port_t *port, uint16_t *ports_cnt, uint16_t *ports_max);
+
+/*!
+ * \brief Comparing function.
+ * Function to compare two port structures based on times of accesses.
+ * \param[in] elem1 Pointer to the first element to be compared.
+ * \param[in] elem2 Pointer to the second element to be compared.
+ * \return Number indicating greater, equal or less sign.
+ */
+int compare_port(const void *elem1, const void *elem2);
 
 /*!
  \brief Allocating extra function
@@ -103,7 +119,7 @@ graph_t *get_host(graph_t *graph, flow_t *flow);
 
 /*!
  * \brief Comparing function.
- * Function to compare two host structure based on times of accesses.
+ * Function to compare two host structures based on times of accesses.
  * \param[in] elem1 Pointer to the first element to be compared.
  * \param[in] elem2 Pointer to the second element to be compared.
  * \return Number indicating greater, equal or less sign.

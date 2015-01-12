@@ -67,13 +67,12 @@ int main(int argc, char **argv)
 
    // Cleaning up allocated structures.
    cleanup:
-      if (params != NULL) {
-         free(params);
-      }
       if (graph != NULL) {
          free_graph(graph);
       }
-
+      if (params != NULL) {
+         free(params);
+      }
    // Ending with failure.
    if (failure == 1) {
       return EXIT_FAILURE;

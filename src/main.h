@@ -64,6 +64,7 @@
 #define NUMBER_LEN 5 /*!< Maximal length of number for buffer. */
 #define ARRAY_EXTRA 4 /*!< Extra array size for a circle buffer. */
 #define PADDING 16 /*!< Padding width for log files. */
+#define TOP_ACCESSED 10 /*!< Count of the most accessed ports to be printed. */
 
 #define PROTOCOL_TCP 6 /*!< TCP protocol number. */
 #define PROTOCOL_UDP 17 /*!< UDP protocol number. */
@@ -74,7 +75,10 @@
 #define PORTS_INIT 8 /*!< Init size of array with network ports. */
 #define HOSTS_INIT 32768 /*!< Init size of array with hosts. */
 
-#define ALL_PORTS 65535 /*!< Maximum number of network ports. */
+#define VERTICAL_THRESHOLD 8192 /*!< Threshold for vertical port scan attack. */
+#define HORIZONTAL_THRESHOLD 4096 /*!< Threshold for vertical port scan attack. */
+#define KNOWN_PORTS 16 /*< Number of well known ports. */
+#define ALL_PORTS 65536 /*!< Maximum number of network ports. */
 
 #define BITS_PORT 16 /*!< Number of bits in network port. */
 #define MASK_PORT 0x8000 /*!< Mask number for network port. */
@@ -88,11 +92,11 @@
 #define TIME_WINDOW 3600 /*!< Default observation time window defined in seconds. */
 
 #define CLUSTERS 2 /*!< Default number of clusters to be used in k-means algorithm. */
-#define OBSERVATIONS 2 /*!< Default minumum number of observations in the cluster. */
+#define OBSERVATIONS 1 /*!< Default minumum number of observations in the cluster. */
 #define square(x) ((x) * (x)) /*!< Square function used in k-means algorithm. */
 
 #define DELIMITER ' ' /*!< Default delimiter for parsing CSV files. */
-#define FILE_FORMAT "%Y-%m-%d_%H-%M-%S" /*!< Default file name in time format. */
+#define FILE_FORMAT "%H-%M-%S" /*!< Default file name in time format. */
 #define TIME_FORMAT "%a %b %d %Y %H:%M:%S" /*!< Default human readable time format. */
 #define DATA_FILE "/tmp/data.txt" /*!< Data file location used by gnuplot.*/
 #define GNUPLOT "/tmp/config.gpl" /*!< Gnuplot configuration file location.*/
@@ -103,11 +107,11 @@
  * \brief Detection mode enumeration.
  * Mode type of the DDoS detection.
  */
-enum detection_mode {
-   MODE_SYN_FLOODING = 0x01, /*!< SYN flooding detection mode. */
-   MODE_PORTSCAN_VER = 0x02, /*!< Portscan detection mode. */
-   MODE_PORTSCAN_HOR = 0x04, /*!< Portscan detection mode. */
-   MODE_ALL = 0x07, /*!< All detection modes. */
+enum attack_type {
+   SYN_FLOODING = 0x01, /*!< SYN flooding attack type. */
+   VER_PORTSCAN = 0x02, /*!< Vertical port scan attack type. */
+   HOR_PORTSCAN = 0x04, /*!< Horizontal port scan attack type. */
+   ALL_ATTACKS = 0x07, /*!< All attack types. */
 };
 
 /*!
@@ -221,6 +225,7 @@ typedef struct params {
    int iter_max; /*!< Maximum number of intervals before flushing all ports. */
    int window_sum; /*!< Number of reached windows during the runtime. */
    char *file; /*!< CSV file to be processed by the algorithm. */
+   char *name; /*!< File name in time format. */
 } params_t;
 
 /*!
@@ -246,11 +251,14 @@ typedef struct flow {
  * to be further examined.
  */
 typedef struct graph {
+   uint8_t attack; /*!< Flag to identify which attack appeared in the interval. */
    uint8_t host_level; /*!< Flag to identify host examination level. */
    uint16_t interval_idx; /*!< Index number of given interval. */
    uint16_t interval_cnt; /*!< Number of reached intervals. */
+   uint16_t ports_ver; /*!< Number of different ports used in the interval. */
+   uint32_t ports_hor; /*!< Maximum number of accesses on a single port in the interval. */
+   port_t ports[ALL_PORTS]; /*!< Array of all ports and number of accesses in the given interval. */
    uint32_t window_cnt; /*!< Number of reached windows before flushing the graph. */
-   uint32_t ports[ALL_PORTS]; /*!< Array of all ports and number of accesses in the given interval. */
    time_t interval_first; /*!< Given Unix timestamp of the interval begging. */
    time_t interval_last; /*!< Calculated Unix timestamp of the interval end. */
    time_t window_first; /*!< Given Unix timestamp of the time window begging. */

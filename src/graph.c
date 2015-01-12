@@ -24,7 +24,9 @@ graph_t *create_graph(params_t *params)
    graph->host_level = LEVEL_INFO;
    graph->interval_idx = graph->interval_cnt = 0;
    graph->window_cnt = 0;
-   memset(graph->ports, 0, ALL_PORTS);
+   graph->ports_ver = 0;
+   graph->ports_hor = 0;
+   reset_port(graph->ports);
    graph->interval_first = graph->interval_last = 0;
    graph->window_first = graph->window_last = 0;
    graph->hosts_cnt = 0;
@@ -46,7 +48,7 @@ graph_t *create_graph(params_t *params)
       goto error;
    }
 
-   if ((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
+   if ((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) {
       graph->clusters = create_cluster(params);
       if (graph->clusters == NULL) {
          goto error;
@@ -80,19 +82,25 @@ void reset_graph(graph_t *graph)
 {
    int i, j;
 
-   if (((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) && (graph->window_cnt != 0)) {
+   graph->attack = 0;
+   graph->ports_ver = 0;
+   graph->ports_hor = 0;
+
+   for (i = 0; i < graph->hosts_cnt; i ++) {
+      graph->hosts[i]->stat = 0;
+   }
+   
+   if (((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) && (graph->window_cnt != 0)) {
       for (i = 0; i < graph->hosts_cnt; i ++) {
-         graph->hosts[i]->stat = 0;
          graph->hosts[i]->cluster = 0;
          graph->hosts[i]->distance = 0.0;
          graph->hosts[i]->intervals[(graph->interval_idx+ARRAY_EXTRA)%graph->params->intvl_max].syn_packets = 0;
       }
    }
 
-   if ((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) {
-      memset(graph->ports, ALL_PORTS, 0);
+   if (((graph->params->mode & VER_PORTSCAN) == VER_PORTSCAN) || ((graph->params->mode & HOR_PORTSCAN) == HOR_PORTSCAN)) {
+      reset_port(graph->ports);
       graph->interval_cnt ++;
-
       if (graph->host_level > LEVEL_INFO) {
          if (graph->interval_cnt == graph->params->iter_max) {
             fprintf(stderr, "Info: Flushing all used ports of given host after %d intervals.\n", graph->params->iter_max);
@@ -111,7 +119,7 @@ void reset_graph(graph_t *graph)
 void print_graph(graph_t *graph)
 {
    int i, j, p, sum;
-   char buffer[BUFFER_TMP], ip[INET_ADDRSTRLEN], name[BUFFER_TMP];
+   char buffer[BUFFER_TMP], date[BUFFER_TMP], ip[INET_ADDRSTRLEN], name[BUFFER_TMP];
    FILE *f;
    struct tm *time;
    struct hostent *he;
@@ -134,8 +142,9 @@ void print_graph(graph_t *graph)
       fprintf(stderr, "Warning: Cannot convert UNIX timestamp, output omitted.\n");
       return;
    }
+   graph->params->name = buffer;
    snprintf(name, BUFFER_TMP, "res/%s.log", buffer);
-   if (strftime(buffer, BUFFER_TMP, TIME_FORMAT, time) == 0) {
+   if (strftime(date, BUFFER_TMP, TIME_FORMAT, time) == 0) {
       fprintf(stderr, "Warning: Cannot convert UNIX timestamp, output omitted.\n");
       return;
    }
@@ -156,32 +165,52 @@ void print_graph(graph_t *graph)
       }
    }
 
-   fprintf(f, "Time:                      %*s\n", p, buffer);
+   fprintf(f, "Time:                      %*s\n", p, date);
    fprintf(f, "Number of active hosts:            %*d\n", p, sum);
-   fprintf(f, "\nK-means algorithm parameters:\n");
-   fprintf(f, "* Clusters:                        %*d\n", p, graph->params->clusters);
+
+   if ((graph->params->mode & VER_PORTSCAN) == VER_PORTSCAN) {
+      fprintf(f, "Number of ports used:              %*d\n", p, graph->ports_ver);
+   }
+   if ((graph->params->mode & HOR_PORTSCAN) == HOR_PORTSCAN) {
+      fprintf(f, "Maximum port accesses:             %*u\n", p, graph->ports_hor);
+   }
+   if ((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) {
+      if (graph->window_cnt != 0) {
+         fprintf(f, "Number of clusters:                %*d\n", p, graph->params->clusters);
+         for (i = 0; i < graph->params->clusters; i ++) {
+            fprintf(f, "* Hosts in cluster %d:              %*lu\n", i + 1, p, graph->clusters[i]->hosts_cnt);
+         }
+      }
+   }
 
    if (graph->params->level >= VERBOSE_BASIC) {
       qsort(graph->hosts, graph->hosts_cnt, sizeof(host_t *), compare_host);
       // Creating plot of possible DDoS attack victims.
-      in_addr_t ip;
-      inet_pton(AF_INET, "82.254.111.99", &ip);
       for (i = 0; i < graph->hosts_cnt; i ++) {
-         if ((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
-            if (graph->hosts[i]->ip == ip) {
-               print_host(graph, i, MODE_SYN_FLOODING);
+         if ((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) {
+            if (graph->hosts[i]->cluster == 1) {
+               //print_host(graph, i, SYN_FLOODING);
             }
          }
-         if ((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) {
-            if (graph->hosts[i]->ip == ip && graph->hosts[i]->level > LEVEL_INFO) {
-               print_host(graph, i, MODE_PORTSCAN_VER);
-               break;
+         if ((graph->params->mode & VER_PORTSCAN) == VER_PORTSCAN) {
+            if (graph->hosts[i]->stat == LEVEL_TRACE) {
+               print_host(graph, i, ALL_ATTACKS);
             }
          }
       }
 
-      if (((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) || ((graph->params->mode & MODE_PORTSCAN_HOR) == MODE_PORTSCAN_HOR)) {
+      if ((graph->attack & VER_PORTSCAN) == VER_PORTSCAN) {
+         print_host(graph, 0, VER_PORTSCAN);
+      }
 
+      if ((graph->attack & HOR_PORTSCAN) == HOR_PORTSCAN) {
+         print_host(graph, 0, HOR_PORTSCAN);
+         fprintf(f, "\nHorizontal port scan attack brief:\n");
+         for (i = 0; i < TOP_ACCESSED; i ++) {
+            fprintf(f, "* \tDestination port:          %*d\n"
+                       "* \tTimes accessed:            %*u\n",
+                    p, graph->ports[i].port_num, p, graph->ports[i].accesses);
+         }
       }
    }
 
@@ -194,7 +223,7 @@ void print_graph(graph_t *graph)
             fprintf(f, "* Destination IP address:          %*s\n"
                        "* Times accessed:                  %*d\n",
                     p, ip, p, graph->hosts[i]->accesses);
-            if ((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) {
+            if (graph->hosts[i]->level > LEVEL_INFO) {
                fprintf(f, "* Ports used:                      %*u\n", p, graph->hosts[i]->extra->ports_cnt);
             }
 
@@ -208,16 +237,16 @@ void print_graph(graph_t *graph)
 
             // Printing information additional information from host structure, not recommended.
             if (graph->params->level == VERBOSE_FULL) {
-               if ((graph->params->mode & MODE_SYN_FLOODING) == MODE_SYN_FLOODING) {
-                  // Printing number of SYN packets and assigned cluster in each observation interval.
+               if ((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) {
+                  // Printing number of SYN packets in each observation interval.
                   fprintf(f, "* Observation intervals:\n");
                   for (j = 0; j < graph->params->interval; j ++) {
                      fprintf(f, "* \t%02d) SYN packets:           %*.0lf\n",
                              j, p, graph->hosts[i]->intervals[(graph->interval_idx+ARRAY_EXTRA+j)%graph->params->intvl_max].syn_packets);
                   }
                }
-               if ((graph->params->mode & MODE_PORTSCAN_VER) == MODE_PORTSCAN_VER) {
-                  // Printing number of SYN packets and assigned cluster in each observation interval.
+               if (graph->hosts[i]->level > LEVEL_INFO) {
+                  // Printing number of accesses on each port in the observation interval.
                   fprintf(f, "* Times port accessed:\n");
                   for (j = 0; j < graph->hosts[i]->extra->ports_cnt; j ++) {
                      if (graph->hosts[i]->extra->ports[j]->accesses > 0) {

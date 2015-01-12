@@ -86,7 +86,7 @@ graph_t *assign_cluster(graph_t *graph)
       }
    }
 
-   // Assigning each host to the cluster based on a distance.
+   // Assigning each host to the cluster based on a Euclidean distance.
    for (i = 0; i < n; i ++) {
       if (graph->hosts[i]->stat != 0) {
          x = INFINITY;
@@ -101,37 +101,37 @@ graph_t *assign_cluster(graph_t *graph)
                graph->hosts[i]->cluster = j;
             }
          }
+         graph->clusters[graph->hosts[i]->cluster]->hosts_cnt ++;
       }
-      graph->clusters[graph->hosts[i]->cluster]->hosts_cnt ++;
    }
 
    // Calculating the mean and sum of squares for each cluster.
    for (i = 0; i < k; i ++) {
       graph->clusters[i]->dev = 0.0;
-      for (j = 0; j < v; j ++) {
-         graph->clusters[i]->centroid[j].syn_packets = 0.0;
+      for (m = 0; m < v; m ++) {
+         graph->clusters[i]->centroid[m].syn_packets = 0.0;
       }
    }
 
    for (i = 0; i < n; i ++) {
       if (graph->hosts[i]->stat != 0) {
-         for (j = 0; j < v; j ++) {
-            graph->clusters[graph->hosts[i]->cluster]->centroid[j].syn_packets += graph->hosts[i]->intervals[j].syn_packets;
+         for (m = 0; m < v; m ++) {
+            graph->clusters[graph->hosts[i]->cluster]->centroid[m].syn_packets += graph->hosts[i]->intervals[m].syn_packets;
          }
       }
    }
 
    for (i = 0; i < k; i ++) {
-      for (j = 0; j < v; j ++) {
-         graph->clusters[i]->centroid[j].syn_packets /= (double) graph->clusters[i]->hosts_cnt;
+      for (m = 0; m < v; m ++) {
+         graph->clusters[i]->centroid[m].syn_packets /= (double) graph->clusters[i]->hosts_cnt;
       }
    }
 
    for (i = 0; i < n; i ++) {
       if (graph->hosts[i]->stat != 0) {
          p = graph->hosts[i]->cluster;
-         for (j = 0; j < v; j ++) {
-            x = graph->hosts[i]->intervals[j].syn_packets - graph->clusters[p]->centroid[j].syn_packets;
+         for (m = 0; m < v; m ++) {
+            x = graph->hosts[i]->intervals[m].syn_packets - graph->clusters[p]->centroid[m].syn_packets;
             y = square(x);
             graph->hosts[i]->distance += y;
             graph->clusters[p]->dev += y;
@@ -142,9 +142,7 @@ graph_t *assign_cluster(graph_t *graph)
    for (i = 0; i < n; i ++) {
       p = graph->hosts[i]->cluster;
       h = graph->clusters[p]->hosts_cnt;
-
-      // Checking for outliers.
-      if (h >= 2) {
+      if (h > 1) {
          graph->hosts[i]->distance = graph->hosts[i]->distance * h / (h - 1);
       }
    }
@@ -159,7 +157,7 @@ graph_t *assign_cluster(graph_t *graph)
             q = p;
 
             // Checking for minimum observations in the cluster.
-            if (graph->clusters[p]->hosts_cnt > OBSERVATIONS) {
+            if (graph->clusters[p]->hosts_cnt >= OBSERVATIONS) {
                d = graph->hosts[i]->distance;
 
                for (j = 0; j < k; j ++) {
@@ -186,7 +184,7 @@ graph_t *assign_cluster(graph_t *graph)
                   for (m = 0; m < v; m ++) {
                      x = graph->clusters[q]->centroid[m].syn_packets * graph->clusters[q]->hosts_cnt - graph->hosts[i]->intervals[m].syn_packets;
                      graph->clusters[graph->hosts[i]->cluster]->centroid[m].syn_packets = x / (graph->clusters[q]->hosts_cnt - 1);
-                     y = graph->clusters[p]->centroid[m].syn_packets * graph->clusters[p]->hosts_cnt - graph->hosts[i]->intervals[m].syn_packets;
+                     y = graph->clusters[p]->centroid[m].syn_packets * graph->clusters[p]->hosts_cnt + graph->hosts[i]->intervals[m].syn_packets;
                      graph->clusters[graph->hosts[i]->cluster]->centroid[m].syn_packets = y / (graph->clusters[p]->hosts_cnt + 1);
                   }
 
@@ -197,17 +195,16 @@ graph_t *assign_cluster(graph_t *graph)
                   graph->hosts[i]->cluster = p;
 
                   for (j = 0; j < n; j ++) {
-                     if (graph->hosts[j]->cluster == p || graph->hosts[j]->cluster == q) {
+                     if ((graph->hosts[j]->stat != 0) && (graph->hosts[j]->cluster == p || graph->hosts[j]->cluster == q)) {
                         graph->hosts[j]->distance = 0.0;
                         for (m = 0; m < v; m ++) {
                            x = graph->hosts[j]->intervals[m].syn_packets - graph->clusters[graph->hosts[j]->cluster]->centroid[m].syn_packets;
                            graph->hosts[j]->distance += square(x);
                         }
                         h = graph->clusters[graph->hosts[j]->cluster]->hosts_cnt;
-                        graph->hosts[j]->distance = graph->hosts[i]->distance * h / (h - 1);
+                        graph->hosts[j]->distance = graph->hosts[j]->distance * h / (h - 1);
                      }
                   }
-
                   stop ++;
                }
             }
