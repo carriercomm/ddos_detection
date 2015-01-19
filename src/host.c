@@ -164,7 +164,7 @@ extra_t *create_extra()
       return NULL;
 }
 
-host_t *create_host(in_addr_t ip, int mode, int array_max)
+host_t *create_host(in_addr_t ip, params_t *params)
 {
    host_t *host;
 
@@ -174,16 +174,20 @@ host_t *create_host(in_addr_t ip, int mode, int array_max)
        goto error;
    }
    host->ip = ip;
-   host->stat = 1;
+   host->stat = 0;
    host->level = LEVEL_INFO;
-   host->cluster = 0;
-   host->distance = 0.0;
    host->accesses = 1;
+   host->distances = NULL;
    host->intervals = NULL;
    host->extra = NULL;
 
-   if ((mode & SYN_FLOODING) == SYN_FLOODING) {
-      host->intervals = (intvl_t *) calloc(array_max, sizeof(intvl_t));
+   if ((params->mode & SYN_FLOODING) == SYN_FLOODING) {
+      host->distances = (double *) calloc(params->clusters, sizeof(double));
+      if (host->distances == NULL) {
+          fprintf(stderr, "Error: Not enough memory for host structure.\n");
+          goto error;
+      }
+      host->intervals = (intvl_t *) calloc(params->intvl_max, sizeof(intvl_t));
       if (host->intervals == NULL) {
           fprintf(stderr, "Error: Not enough memory for host structure.\n");
           goto error;
@@ -192,6 +196,9 @@ host_t *create_host(in_addr_t ip, int mode, int array_max)
    return host;
 
    error:
+      if (host->distances != NULL) {
+         free(host->distances);
+      }
       if (host->intervals != NULL) {
          free(host->intervals);
       }
@@ -270,6 +277,9 @@ void free_host(node_t *node)
       if (host->intervals != NULL) {
          free(host->intervals);
       }
+      if (host->distances != NULL) {
+         free(host->distances);
+      }
       if (host->extra != NULL) {
          if (host->extra->root != NULL) {
             free_port(host->extra->root);
@@ -328,7 +338,7 @@ graph_t *get_host(graph_t *graph, flow_t *flow)
 
    // Creating new host with destination address if not present.
    if (node->val == NULL) {
-      host = create_host(flow->dst_ip, graph->params->mode, graph->params->intvl_max);
+      host = create_host(flow->dst_ip, graph->params);
       if (host == NULL) {
          goto error;
       }
@@ -339,13 +349,12 @@ graph_t *get_host(graph_t *graph, flow_t *flow)
       }
    } else {
       host = (host_t *) node->val;
-      host->stat = 1;
       host->accesses ++;
    }
 
    // Completing data of ports.
-   if ((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) {
-
+   if (((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) && (flow->syn_flag == 1)) {
+      host->stat = 1;
       // Adding all SYN packets in the same interval.
       if (flow->time_last < graph->interval_last) {
          host->intervals[graph->interval_idx].syn_packets += flow->packets;
@@ -426,8 +435,9 @@ int compare_host(const void *elem1, const void *elem2)
 void print_host(graph_t *graph, int idx, int mode)
 {
    int i, pid, status;
-   char ip[INET_ADDRSTRLEN], buffer[BUFFER_TMP];
+   char buffer[BUFFER_TMP], dir[BUFFER_TMP], ip[INET_ADDRSTRLEN];
    struct tm *time;
+   struct stat st;
    FILE *f, *g;
 
    f = fopen(DATA_FILE, "w");
@@ -472,15 +482,22 @@ void print_host(graph_t *graph, int idx, int mode)
       }
       fclose(f);
       inet_ntop(AF_INET, &(graph->hosts[idx]->ip), ip, INET_ADDRSTRLEN);
+      snprintf(dir, BUFFER_TMP, "res/%s", ip);
+      if ((stat(dir, &st)) != 0) {
+         if ((mkdir(dir, PERMISSIONS)) != 0) {
+            fprintf(stderr, "Warning: Cannot create a directory for host.\n");
+            return;
+         }
+      }
       fprintf(g, "set title \"Destination address: %s\\nTime first: %s\"\n"
                  "set xlabel \"Time interval\"\n"
                  "set ylabel \"# SYN packets\"\n"
                  "set y2label \"# SYN packets\"\n"
                  "set xrange [0:%d]\n"
-                 "set output \"res/%s_SYN_w%d_t%02d_%s.png\"\n"
+                 "set output \"res/%s/%s_SYN_w%d_t%02d.png\"\n"
                  "plot \"%s\" using 1:2 with line\n",
-              ip, buffer, graph->params->intvl_max - ARRAY_EXTRA - 1, graph->params->name, graph->params->window_sum,
-              (graph->interval_idx - 1 + (graph->window_cnt * ARRAY_EXTRA)) % graph->params->intvl_max, ip, DATA_FILE);
+              ip, buffer, graph->params->intvl_max - ARRAY_EXTRA - 1, ip, graph->params->name, graph->params->window_sum,
+              (graph->interval_idx - 1 + (graph->window_cnt * ARRAY_EXTRA)) % graph->params->intvl_max, DATA_FILE);
       fclose(g);
    }
    

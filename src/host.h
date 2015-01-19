@@ -72,11 +72,10 @@ extra_t *create_extra();
  * Function to allocate new host to graph structure and return a pointer
  * to newly created host.
  * \param[in] ip IP address of new the host.
- * \param[in] mode Mode type of the DDoS detection.
- * \param[in] array_max Array size of intervals.
+ * \param[in] params Pointer to structure with all initialized parameters.
  * \return Pointer to newly created host, otherwise NULL.
  */
-host_t *create_host(in_addr_t ip, int mode, int array_max);
+host_t *create_host(in_addr_t ip, params_t *params);
 
 /*!
  * \brief Creating IPv4 host function.

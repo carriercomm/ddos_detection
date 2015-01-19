@@ -54,6 +54,8 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 
 /*!
@@ -65,6 +67,7 @@
 #define ARRAY_EXTRA 4 /*!< Extra array size for a circle buffer. */
 #define PADDING 16 /*!< Padding width for log files. */
 #define TOP_ACCESSED 10 /*!< Count of the most accessed ports to be printed. */
+#define PERMISSIONS 0775 /*!< Default permissions of the created a directory. */
 
 #define PROTOCOL_TCP 6 /*!< TCP protocol number. */
 #define PROTOCOL_UDP 17 /*!< UDP protocol number. */
@@ -92,6 +95,9 @@
 #define TIME_WINDOW 3600 /*!< Default observation time window defined in seconds. */
 
 #define CLUSTERS 2 /*!< Default number of clusters to be used in k-means algorithm. */
+#define CLUSTERS_MAX 255 /*!< Maximum number of clusters to be used in k-means algorithm. */
+#define SYN_THRESHOLD 512 /*!< Minimum number of SYN packets sent in the interval for SYN flooding attack. */
+#define MEAN_DEVIATION 4 /*!< Mulitplier of mean to be different from standard deviation. */
 #define OBSERVATIONS 1 /*!< Default minumum number of observations in the cluster. */
 #define square(x) ((x) * (x)) /*!< Square function used in k-means algorithm. */
 
@@ -201,8 +207,9 @@ typedef struct host {
    uint8_t stat; /*!< Host status for further examination. */
    uint8_t level; /*!< Host examination level. */
    uint8_t cluster; /*!< Assigned cluster to the host. */
-   double distance; /*!< Distance to the nearest centroid. */
+   uint8_t previous; /*!< Assigned cluster in the previous iteration. */
    uint32_t accesses; /*!< Number of times the given address has been accessed. */
+   double *distances; /*!< Distances to the centroids. */
    intvl_t *intervals; /*!< Array of SYN packets number in the given interval. */
    extra_t *extra; /*!< Pointer to extra information about the host. */
 } host_t;
@@ -253,6 +260,7 @@ typedef struct flow {
 typedef struct graph {
    uint8_t attack; /*!< Flag to identify which attack appeared in the interval. */
    uint8_t host_level; /*!< Flag to identify host examination level. */
+   uint8_t cluster_idx; /*!< Index of cluster with detected hosts. */
    uint16_t interval_idx; /*!< Index number of given interval. */
    uint16_t interval_cnt; /*!< Number of reached intervals. */
    uint16_t ports_ver; /*!< Number of different ports used in the interval. */

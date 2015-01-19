@@ -60,8 +60,7 @@ graph_t *parse_data(params_t *params);
  * Function to decide which detection mode and algorithm will be used
  * based on initialized parameters given in command line.
  * \param[in] graph Pointer to existing graph structure.
- * \return Pointer to graph structure on success, otherwise NULL.
  */
-graph_t *parse_detection(graph_t *graph);
+void parse_detection(graph_t *graph);
 
 #endif /* _PARSER_ */

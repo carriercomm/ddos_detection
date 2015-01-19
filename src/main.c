@@ -59,6 +59,12 @@ int main(int argc, char **argv)
       goto cleanup;
    }
 
+   // Running the help mode, end of program.
+   if (params->file == NULL) {
+      goto cleanup; 
+   }
+
+   // Running the detection.
    graph = parse_data(params);
    if (graph == NULL) {
       failure = 1;

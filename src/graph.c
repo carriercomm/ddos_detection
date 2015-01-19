@@ -87,13 +87,13 @@ void reset_graph(graph_t *graph)
    graph->ports_hor = 0;
 
    for (i = 0; i < graph->hosts_cnt; i ++) {
-      graph->hosts[i]->stat = 0;
+      graph->hosts[i]->accesses = 0;
    }
    
    if (((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) && (graph->window_cnt != 0)) {
       for (i = 0; i < graph->hosts_cnt; i ++) {
+         graph->hosts[i]->stat = 0;
          graph->hosts[i]->cluster = 0;
-         graph->hosts[i]->distance = 0.0;
          graph->hosts[i]->intervals[(graph->interval_idx+ARRAY_EXTRA)%graph->params->intvl_max].syn_packets = 0;
       }
    }
@@ -160,7 +160,7 @@ void print_graph(graph_t *graph)
    }
 
    for (i = 0; i < graph->hosts_cnt; i ++) {
-      if (graph->hosts[i]->stat == 1) {
+      if (graph->hosts[i]->accesses > 0) {
          sum ++;
       }
    }
@@ -180,6 +180,7 @@ void print_graph(graph_t *graph)
          for (i = 0; i < graph->params->clusters; i ++) {
             fprintf(f, "* Hosts in cluster %d:              %*lu\n", i + 1, p, graph->clusters[i]->hosts_cnt);
          }
+         fprintf(f, "\nSYN flooding attack brief:\n");
       }
    }
 
@@ -187,13 +188,17 @@ void print_graph(graph_t *graph)
       qsort(graph->hosts, graph->hosts_cnt, sizeof(host_t *), compare_host);
       // Creating plot of possible DDoS attack victims.
       for (i = 0; i < graph->hosts_cnt; i ++) {
-         if ((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) {
-            if (graph->hosts[i]->cluster == 1) {
-               //print_host(graph, i, SYN_FLOODING);
+         if ((graph->attack & SYN_FLOODING) == SYN_FLOODING) {
+            if (graph->window_cnt != 0) {
+               if ((graph->hosts[i]->stat != 0) && (graph->hosts[i]->cluster == graph->cluster_idx)) {
+                  inet_ntop(AF_INET, &(graph->hosts[i]->ip), ip, INET_ADDRSTRLEN);
+                  fprintf(f, "* Destination IP address:          %*s\n", p, ip);
+                  print_host(graph, i, SYN_FLOODING);
+               }
             }
          }
-         if ((graph->params->mode & VER_PORTSCAN) == VER_PORTSCAN) {
-            if (graph->hosts[i]->stat == LEVEL_TRACE) {
+         if ((graph->attack & VER_PORTSCAN) == VER_PORTSCAN) {
+            if ((graph->hosts[i]->accesses > 0) && (graph->hosts[i]->level == LEVEL_TRACE)) {
                print_host(graph, i, ALL_ATTACKS);
             }
          }
@@ -207,8 +212,8 @@ void print_graph(graph_t *graph)
          print_host(graph, 0, HOR_PORTSCAN);
          fprintf(f, "\nHorizontal port scan attack brief:\n");
          for (i = 0; i < TOP_ACCESSED; i ++) {
-            fprintf(f, "* \tDestination port:          %*d\n"
-                       "* \tTimes accessed:            %*u\n",
+            fprintf(f, "* Destination port:                %*d\n"
+                       "* Times accessed:                  %*u\n",
                     p, graph->ports[i].port_num, p, graph->ports[i].accesses);
          }
       }

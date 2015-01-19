@@ -37,7 +37,7 @@ params_t *parse_params(int argc, char **argv)
    description =
       "DDoS Detection\n"
       "Module for detecting and analyzing potential DDoS attacks in computer networks.\n"
-      "Special parameters:\n"
+      "\nSpecial parameters:\n"
       "  -d NUM       Set the mode bit of DDoS detection, SYN flooding by default.\n"
       "  -e NUM       Set the number of iterations to flush the graph, 0 by default.\n"
       "  -f PATH      Set the path of CSV file to be examined.\n"
@@ -46,14 +46,16 @@ params_t *parse_params(int argc, char **argv)
       "  -p NUM       Show progress - print a dot every N flows.\n"
       "  -t TIME      Set the observation interval in seconds, 1 minute by default.\n"
       "  -w TIME      Set the observation time window in seconds, 1 hour by default.\n"
-      "Detection modes:\n"
+      "\nDetection modes:\n"
       "   1) SYN flooding detection only.\n"
       "   2) Vertical port scanning detection only.\n"
       "   3) SYN flooding and vertical port scanning detection.\n"
       "   4) Horizontal port scanning detection only.\n"
       "   5) SYN flooding and horizontal port scanning detection.\n"
       "   6) Vertical and horizontal port scanning detection.\n"
-      "   7) All detections combined.\n";
+      "   7) All detections combined.\n"
+      "\nK-means parameters:\n"
+      "   - Number of clusters can be assigned between 2 and 255.\n";
 
 
    params = (params_t *) calloc(1, sizeof(params_t));
@@ -74,12 +76,12 @@ params_t *parse_params(int argc, char **argv)
    params->file = NULL;
    params->name = NULL;
 
-   snprintf(usage, BUFFER_TMP, "Usage: %s [OPTION]...\nTry `%s -h' for more information.\n", argv[0], argv[0]);
+   snprintf(usage, BUFFER_TMP, "Usage: %s -f FILE [OPTION]...\nTry `%s -h' for more information.\n", argv[0], argv[0]);
 
    while ((opt = getopt(argc, argv, OPTIONS)) != -1) {
       switch (opt) {
          case 'd':
-            if (strlen(optarg) > 1 || sscanf(optarg, "%d%s", &params->mode, tmp) != 1 || params->mode < 0) {
+            if (strlen(optarg) > 1 || sscanf(optarg, "%d%s", &params->mode, tmp) != 1 || params->mode < 0 || params->mode > ALL_ATTACKS) {
               fprintf(stderr, "Error: Invalid detection mode number.\n");
               goto error;
             }
@@ -95,12 +97,12 @@ params_t *parse_params(int argc, char **argv)
             break;
          case 'h':
             fprintf(stderr, "%s\n", description);
-            break;
+            return params;
          case 'H':
             fprintf(stderr, "%s\n", description);
-            break;
+            return params;
          case 'k':
-            if (strlen(optarg) > 1 || sscanf(optarg, "%d%s", &params->clusters, tmp) != 1 || params->clusters < CLUSTERS || params->clusters > NUMBER_LEN) {
+            if (strlen(optarg) > 1 || sscanf(optarg, "%d%s", &params->clusters, tmp) != 1 || params->clusters < CLUSTERS || params->clusters > CLUSTERS_MAX) {
               fprintf(stderr, "Error: Invalid number of clusters to be used in k-means algorithm.\n");
               goto error;
             }
@@ -130,9 +132,13 @@ params_t *parse_params(int argc, char **argv)
             break;
          default:
             fprintf(stderr, "Error: Too many arguments.\n");
-            fprintf(stderr, "%s", usage);
             goto error;
       }
+   }
+
+   if (params->file == NULL) {
+      fprintf(stderr, "Error: You must specify a data file.\n");
+      goto error;
    }
 
    // Determining maximum number for SYN packets array based on time window and observation intervals.
@@ -147,6 +153,7 @@ params_t *parse_params(int argc, char **argv)
 
    // Cleaning up after error.
    error:
+      fprintf(stderr, "%s", usage);
       if (params != NULL) {
          free(params);
       }
@@ -301,11 +308,6 @@ graph_t *parse_data(params_t *params)
    tmp = buffer;
    graph = NULL;
 
-   if (params->mode > ALL_ATTACKS) {
-      fprintf(stderr, "Error: Unknown detection mode.\n");
-      goto error;
-   }
-
    graph = create_graph(params);
    if (graph == NULL) {
       goto error;
@@ -385,10 +387,10 @@ graph_t *parse_data(params_t *params)
                   }
                   // Shifting to the next interval.
                   graph->interval_idx = (graph->interval_idx + 1) % graph->params->intvl_max;
-                  graph = parse_detection(graph);
-                  if (graph == NULL) {
-                     goto error;
-                  }
+
+                  // Starting detection.
+                  parse_detection(graph);
+
                   // Time window reached.
                   if (flow.time_first >= graph->window_last) {
                      graph->params->window_sum ++;
@@ -465,11 +467,7 @@ graph_t *parse_data(params_t *params)
    }
    fprintf(stderr,"Info: All data have been successfully processed, processing residues.\n");
    graph->interval_idx = (graph->interval_idx + 1) % graph->params->intvl_max;
-   graph = parse_detection(graph);
-   if (graph == NULL) {
-      goto error;
-   }
-
+   parse_detection(graph);
    return graph;
 
    // Cleaning up after error.
@@ -480,19 +478,17 @@ graph_t *parse_data(params_t *params)
       return NULL;
 }
 
-graph_t *parse_detection(graph_t *graph)
+void parse_detection(graph_t *graph)
 {
    char flag;
    int i, j;
 
    if ((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) {
-      if (graph->params->level > VERBOSITY) {
-         fprintf(stderr, "Info: Starting SYN flooding detection.\n");
-      }
       if (graph->window_cnt != 0) {
-         if ((graph = assign_cluster(graph)) == NULL) {
-            goto error;
+         if (graph->params->level > VERBOSITY) {
+            fprintf(stderr, "Info: Starting SYN flooding detection.\n");
          }
+         batch_cluster(graph);
       }
    }
 
@@ -541,12 +537,4 @@ graph_t *parse_detection(graph_t *graph)
    if (graph->params->level > VERBOSITY) {
       fprintf(stderr, "Info: Detection for given interval finished, results available.\n");
    }
-   return graph;
-
-   // Cleaning up after error.
-   error:
-      if (graph != NULL) {
-         free_graph(graph);
-      }
-      return NULL;
 }
