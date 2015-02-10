@@ -35,7 +35,7 @@ node_t *search_port(uint16_t port, node_t *root)
          if (node->left == NULL) {
             tmp = (node_t *) calloc(1, sizeof(node_t));
             if (tmp == NULL) {
-               fprintf(stderr, "Error: Not enough memory for node structure.\n");
+               fprintf(stderr, "%sNot enough memory for node structure.\n", ERROR);
                return NULL;
             }
             node->left = tmp;
@@ -52,7 +52,7 @@ node_t *search_port(uint16_t port, node_t *root)
          if (node->right == NULL) {
             tmp = (node_t *) calloc(1, sizeof(node_t));
             if (tmp == NULL) {
-               fprintf(stderr, "Error: Not enough memory for node structure.\n");
+               fprintf(stderr, "%sNot enough memory for node structure.\n", ERROR);
                return NULL;
             }
             node->right = tmp;
@@ -102,7 +102,7 @@ port_t **add_port(port_t **ports, port_t *port, uint16_t *ports_cnt, uint16_t *p
       }
       port_t **tmp = (port_t **) realloc(ports, (*ports_max) * sizeof(port_t *));
       if (tmp == NULL) {
-         fprintf(stderr, "Error: Not enough memory for ports array.\n");
+         fprintf(stderr, "%sNot enough memory for ports array.\n", ERROR);
          free(ports);
          return NULL;
       }
@@ -129,7 +129,7 @@ extra_t *create_extra()
 
    extra = (extra_t *) calloc(1, sizeof(extra_t));
    if (extra == NULL) {
-       fprintf(stderr, "Error: Not enough memory for extra host structure.\n");
+       fprintf(stderr, "%sNot enough memory for extra host structure.\n", ERROR);
        goto error;
    }
 
@@ -140,14 +140,14 @@ extra_t *create_extra()
 
    extra->root = (node_t *) calloc(1, sizeof(node_t));
    if (extra->root == NULL) {
-      fprintf(stderr, "Error: Not enough memory for node structure.\n");
+      fprintf(stderr, "%sNot enough memory for node structure.\n", ERROR);
       goto error;
    }
    extra->root->left = NULL;
    extra->root->right = NULL;
    extra->ports = (port_t **) calloc(extra->ports_max, sizeof(port_t *));
    if (extra->ports == NULL) {
-      fprintf(stderr, "Error: Not enough memory for ports array.\n");
+      fprintf(stderr, "%sNot enough memory for ports array.\n", ERROR);
       goto error;
    }
 
@@ -170,7 +170,7 @@ host_t *create_host(in_addr_t ip, params_t *params)
 
    host = (host_t *) calloc(1, sizeof(host_t));
    if (host == NULL) {
-       fprintf(stderr, "Error: Not enough memory for host structure.\n");
+       fprintf(stderr, "%sNot enough memory for host structure.\n", ERROR);
        goto error;
    }
    host->ip = ip;
@@ -184,12 +184,12 @@ host_t *create_host(in_addr_t ip, params_t *params)
    if ((params->mode & SYN_FLOODING) == SYN_FLOODING) {
       host->distances = (double *) calloc(params->clusters, sizeof(double));
       if (host->distances == NULL) {
-          fprintf(stderr, "Error: Not enough memory for host structure.\n");
+          fprintf(stderr, "%sNot enough memory for host structure.\n", ERROR);
           goto error;
       }
       host->intervals = (intvl_t *) calloc(params->intvl_max, sizeof(intvl_t));
       if (host->intervals == NULL) {
-          fprintf(stderr, "Error: Not enough memory for host structure.\n");
+          fprintf(stderr, "%sNot enough memory for host structure.\n", ERROR);
           goto error;
       }
    }
@@ -223,7 +223,7 @@ node_t *search_host(in_addr_t ip, node_t *root)
          if (node->left == NULL) {
             tmp = (node_t *) calloc(1, sizeof(node_t));
             if (tmp == NULL) {
-               fprintf(stderr, "Error: Not enough memory for node structure.\n");
+               fprintf(stderr, "%sNot enough memory for node structure.\n", ERROR);
                return NULL;
             }
             node->left = tmp;
@@ -240,7 +240,7 @@ node_t *search_host(in_addr_t ip, node_t *root)
          if (node->right == NULL) {
             tmp = (node_t *) calloc(1, sizeof(node_t));
             if (tmp == NULL) {
-               fprintf(stderr, "Error: Not enough memory for node structure.\n");
+               fprintf(stderr, "%sNot enough memory for node structure.\n", ERROR);
                return NULL;
             }
             node->right = tmp;
@@ -302,12 +302,12 @@ host_t **add_host(host_t **hosts, host_t *host, uint64_t *hosts_cnt, uint64_t *h
    if (*hosts_cnt == *hosts_max) {
       *hosts_max *= 2;
       if (*hosts_max == 0) {
-         fprintf(stderr, "Warning: Too many hosts in graph, next time it might overflow.\n");
+         fprintf(stderr, "%sToo many hosts in graph, next time it might overflow.\n", WARNING);
          *hosts_max -= 1;
       }
       host_t **tmp = (host_t **) realloc(hosts, (*hosts_max) * sizeof(host_t *));
       if (tmp == NULL) {
-         fprintf(stderr, "Error: Not enough memory for hosts array.\n");
+         fprintf(stderr, "%sNot enough memory for hosts array.\n", ERROR);
          free(hosts);
          return NULL;
       }
@@ -397,7 +397,7 @@ graph_t *get_host(graph_t *graph, flow_t *flow)
       if (node->val == NULL) {
          port = (port_t *) calloc(1, sizeof(port_t));
          if (port == NULL) {
-            fprintf(stderr, "Error: Not enough memory for port structure.\n");
+            fprintf(stderr, "%sNot enough memory for port structure.\n", ERROR);
             goto error;
          }
          node->val = port;
@@ -442,13 +442,13 @@ void print_host(graph_t *graph, int idx, int mode)
 
    f = fopen(DATA_FILE, "w");
    if (f == NULL) {
-      fprintf(stderr, "Warning: Cannot create empty data file in temporary folder, plot omitted.\n");
+      fprintf(stderr, "%sCannot create empty data file in temporary folder, plot omitted.\n", WARNING);
       return;
    }
 
    g = fopen(GNUPLOT, "w");
    if (f == NULL) {
-      fprintf(stderr, "Warning: Cannot create gnuplot configuration folder, plot omitted.\n");
+      fprintf(stderr, "%sCannot create gnuplot configuration folder, plot omitted.\n", WARNING);
       fclose(f);
       return;
    }
@@ -460,11 +460,11 @@ void print_host(graph_t *graph, int idx, int mode)
       time = localtime(&(graph->interval_first));
    }
    if (time == NULL) {
-      fprintf(stderr, "Warning: Cannot convert UNIX timestamp, plot omitted.\n");
+      fprintf(stderr, "%sCannot convert UNIX timestamp, plot omitted.\n", WARNING);
       return;
    }
    if (strftime(buffer, BUFFER_TMP, TIME_FORMAT, time) == 0) {
-      fprintf(stderr, "Warning: Cannot convert UNIX timestamp, plot omitted.\n");
+      fprintf(stderr, "%sCannot convert UNIX timestamp, plot omitted.\n", WARNING);
       return;
    }
    fprintf(g, "set terminal pngcairo font \",8\" enhanced\nunset key\n");
@@ -485,7 +485,7 @@ void print_host(graph_t *graph, int idx, int mode)
       snprintf(dir, BUFFER_TMP, "res/%s", ip);
       if ((stat(dir, &st)) != 0) {
          if ((mkdir(dir, PERMISSIONS)) != 0) {
-            fprintf(stderr, "Warning: Cannot create a directory for host.\n");
+            fprintf(stderr, "%sCannot create a directory for host.\n", WARNING);
             return;
          }
       }
@@ -570,19 +570,19 @@ void print_host(graph_t *graph, int idx, int mode)
    // Running gnuplot in a child process
    if ((pid = fork()) == 0) {
       if ((execl("/usr/bin/gnuplot", "gnuplot", GNUPLOT, NULL)) < 0) {
-         fprintf(stderr, "Warning: Cannot run gnuplot, plot omitted.\n");
+         fprintf(stderr, "%sCannot run gnuplot, plot omitted.\n", WARNING);
       }
    }
 
    // Error while forking the process
    else if (pid < 0) {
-      fprintf(stderr, "Error: Cannot fork process.\n");
+      fprintf(stderr, "%sCannot fork process.\n", ERROR);
       return;
    }
 
    else {
       if (wait(&status) < 0) {
-         fprintf(stderr, "Error: Child process does not respond.\n");
+         fprintf(stderr, "%sChild process does not respond.\n", ERROR);
          return;
       }
    }

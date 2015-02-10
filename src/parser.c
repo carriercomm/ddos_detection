@@ -43,6 +43,8 @@ params_t *parse_params(int argc, char **argv)
       "  -f PATH      Set the path of CSV file to be examined.\n"
       "  -k NUM       Set the number of clusters used by k-means algorithm, 2 by default.\n"
       "  -L LEVEL     Print graphs based on given verbosity level, range 1 to 5.\n"
+      "  -M LIMIT     Set the threshold for vertical port scan attack, 8192 by default.\n"
+      "  -N LIMIT     Set the threshold for horizontal port scan attack, 4096 by default.\n"
       "  -p NUM       Show progress - print a dot every N flows.\n"
       "  -t TIME      Set the observation interval in seconds, 1 minute by default.\n"
       "  -w TIME      Set the observation time window in seconds, 1 hour by default.\n"
@@ -60,7 +62,7 @@ params_t *parse_params(int argc, char **argv)
 
    params = (params_t *) calloc(1, sizeof(params_t));
    if (params == NULL) {
-      fprintf(stderr, "Error: Not enough memory for parameters structure.\n");
+      fprintf(stderr, "%sNot enough memory for parameters structure.\n", ERROR);
       return NULL;
    }
 
@@ -73,6 +75,8 @@ params_t *parse_params(int argc, char **argv)
    params->interval = INTERVAL;
    params->time_window = TIME_WINDOW;
    params->window_sum = 0;
+   params->ver_threshold = VERTICAL_THRESHOLD;
+   params->hor_threshold = HORIZONTAL_THRESHOLD;
    params->file = NULL;
    params->name = NULL;
 
@@ -82,13 +86,13 @@ params_t *parse_params(int argc, char **argv)
       switch (opt) {
          case 'd':
             if (strlen(optarg) > 1 || sscanf(optarg, "%d%s", &params->mode, tmp) != 1 || params->mode < 0 || params->mode > ALL_ATTACKS) {
-              fprintf(stderr, "Error: Invalid detection mode number.\n");
+              fprintf(stderr, "%sInvalid detection mode number.\n", ERROR);
               goto error;
             }
             break;
          case 'e':
             if (strlen(optarg) > NUMBER_LEN || sscanf(optarg, "%d%s", &params->flush_iter, tmp) != 1 || params->flush_iter < 0) {
-              fprintf(stderr, "Error: Invalid flush iteration number.\n");
+              fprintf(stderr, "%sInvalid flush iteration number.\n", ERROR);
               goto error;
             }
             break;
@@ -103,48 +107,60 @@ params_t *parse_params(int argc, char **argv)
             return params;
          case 'k':
             if (strlen(optarg) > 1 || sscanf(optarg, "%d%s", &params->clusters, tmp) != 1 || params->clusters < CLUSTERS || params->clusters > CLUSTERS_MAX) {
-              fprintf(stderr, "Error: Invalid number of clusters to be used in k-means algorithm.\n");
+              fprintf(stderr, "%sInvalid number of clusters to be used in k-means algorithm.\n", ERROR);
               goto error;
             }
          case 'L':
             if (strlen(optarg) > 1 || sscanf(optarg, "%d%s", &params->level, tmp) != 1 || params->level < 0 || params->level > NUMBER_LEN) {
-              fprintf(stderr, "Error: Invalid verbosity level.\n");
+              fprintf(stderr, "%sInvalid verbosity level.\n", ERROR);
+              goto error;
+            }
+            break;
+         case 'M':
+            if (strlen(optarg) > NUMBER_LEN || sscanf(optarg, "%d%s", &params->ver_threshold, tmp) != 1 || params->interval <= 0) {
+              fprintf(stderr, "%sInvalid vertical port scan threshold.\n", ERROR);
+              goto error;
+            }
+            break;
+         case 'N':
+            if (strlen(optarg) > NUMBER_LEN || sscanf(optarg, "%d%s", &params->hor_threshold, tmp) != 1 || params->interval <= 0) {
+              fprintf(stderr, "%sInvalid horizontal port scan threshold.\n", ERROR);
               goto error;
             }
             break;
          case 'p':
             if (strlen(optarg) > NUMBER_LEN || sscanf(optarg, "%d%s", &params->progress, tmp) != 1 || params->progress < 0) {
-              fprintf(stderr, "Error: Invalid progress dot number.\n");
+              fprintf(stderr, "%sInvalid progress dot number.\n", ERROR);
               goto error;
             }
             break;
          case 't':
             if (strlen(optarg) > NUMBER_LEN || sscanf(optarg, "%d%s", &params->interval, tmp) != 1 || params->interval <= 0) {
-              fprintf(stderr, "Error: Invalid SYN packets observation interval.\n");
+              fprintf(stderr, "%sInvalid SYN packets observation interval.\n", ERROR);
               goto error;
             }
             break;
          case 'w':
             if (strlen(optarg) > NUMBER_LEN || sscanf(optarg, "%d%s", &params->time_window, tmp) != 1 || params->time_window <= 0) {
-              fprintf(stderr, "Error: Invalid observation time window.\n");
+              fprintf(stderr, "%sInvalid observation time window.\n", ERROR);
               goto error;
             }
             break;
          default:
-            fprintf(stderr, "Error: Too many arguments.\n");
+            fprintf(stderr, "%sToo many arguments.\n", ERROR);
             goto error;
       }
    }
 
    if (params->file == NULL) {
-      fprintf(stderr, "Error: You must specify a data file.\n");
+      fprintf(stderr, "%sYou must specify a data file.\n", ERROR);
       goto error;
    }
 
    // Determining maximum number for SYN packets array based on time window and observation intervals.
    params->intvl_max = (params->time_window / params->interval) + ARRAY_EXTRA;
    if (params->intvl_max <= ARRAY_MIN) {
-      fprintf(stderr, "Error: Time window cannot be less or closely equal than observation interval.\n");
+      fprintf(stderr, "%sTime window cannot be less or closely equal than observation interval.\n", ERROR);
       goto error;
    }
    params->iter_max = PORT_WINDOW / params->interval;
@@ -190,56 +206,56 @@ int parse_line(graph_t *graph, flow_t *flow, char *line, int len)
    // Retrieving tokens.
    dst_ip = parse_token(&line, &len);
    if (dst_ip == NULL) {
-      fprintf(stderr, "Warning: Missing destination IP address, parsing interrupted.\n");
+      fprintf(stderr, "%sMissing destination IP address, parsing interrupted.\n", WARNING);
       return EXIT_FAILURE;
    }
    if (inet_pton(AF_INET, dst_ip, &(flow->dst_ip)) != 1) {
-         fprintf(stderr, "Warning: Cannot convert string to destination IP address, parsing interrupted.\n");
+         fprintf(stderr, "%sCannot convert string to destination IP address, parsing interrupted.\n", WARNING);
          return EXIT_FAILURE;
    }
 
    src_ip = parse_token(&line, &len);
    if (src_ip == NULL) {
-      fprintf(stderr, "Warning: Missing source IP address, parsing interrupted.\n");
+      fprintf(stderr, "%sMissing source IP address, parsing interrupted.\n", WARNING);
       return EXIT_FAILURE;
    }
    if (inet_pton(AF_INET, src_ip, &(flow->src_ip)) != 1) {
-         fprintf(stderr, "Warning: Cannot convert string to source IP address, parsing interrupted.\n");
+         fprintf(stderr, "%sCannot convert string to source IP address, parsing interrupted.\n", WARNING);
          return EXIT_FAILURE;
    }
 
    dst_port = parse_token(&line, &len);
    if (dst_port == NULL) {
-      fprintf(stderr, "Warning: Missing destination port, parsing interrupted.\n");
+      fprintf(stderr, "%sMissing destination port, parsing interrupted.\n", WARNING);
       return EXIT_FAILURE;
    }
    flow->dst_port = atoi(dst_port);
    if (flow->dst_port < 0 || flow->dst_port > ALL_PORTS) {
-      fprintf(stderr, "Warning: Invalid destination port number, parsing interrupted.\n");
+      fprintf(stderr, "%sInvalid destination port number, parsing interrupted.\n", WARNING);
       return EXIT_FAILURE;
    }
 
    src_port = parse_token(&line, &len);
    if (src_port == NULL) {
-      fprintf(stderr, "Warning: Missing source port, parsing interrupted.\n");
+      fprintf(stderr, "%sMissing source port, parsing interrupted.\n", WARNING);
       return EXIT_FAILURE;
    }
    flow->src_port = atoi(src_port);
    if (flow->dst_port < 0 || flow->dst_port > ALL_PORTS) {
-      fprintf(stderr, "Warning: Invalid source port number, parsing interrupted.\n");
+      fprintf(stderr, "%sInvalid source port number, parsing interrupted.\n", WARNING);
       return EXIT_FAILURE;
    }
 
    protocol = parse_token(&line, &len);
    if (protocol == NULL) {
-      fprintf(stderr, "Warning: Missing used protocol, parsing interrupted.\n");
+      fprintf(stderr, "%sMissing used protocol, parsing interrupted.\n", WARNING);
       return EXIT_FAILURE;
    }
    flow->protocol = atoi(protocol);
 
    time_first = parse_token(&line, &len);
    if (time_first == NULL) {
-      fprintf(stderr, "Warning: Missing time of the first packet, parsing interrupted.\n");
+      fprintf(stderr, "%sMissing time of the first packet, parsing interrupted.\n", WARNING);
       return EXIT_FAILURE;
    }
    flow->time_first = atoi(time_first);
@@ -249,28 +265,28 @@ int parse_line(graph_t *graph, flow_t *flow, char *line, int len)
 
    time_last = parse_token(&line, &len);
    if (time_last == NULL) {
-      fprintf(stderr, "Warning: Missing time of the last packet, parsing interrupted.\n");
+      fprintf(stderr, "%sMissing time of the last packet, parsing interrupted.\n", WARNING);
       return EXIT_FAILURE;
    }
    flow->time_last = atoi(time_last);
 
    bytes = parse_token(&line, &len);
    if (bytes == NULL) {
-      fprintf(stderr, "Warning: Missing number of transmitted bytes, parsing interrupted.\n");
+      fprintf(stderr, "%sMissing number of transmitted bytes, parsing interrupted.\n", WARNING);
       return EXIT_FAILURE;
    }
    flow->bytes = atoi(bytes);
 
    packets = parse_token(&line, &len);
    if (packets == NULL) {
-      fprintf(stderr, "Warning: Missing number of transmitted packets, parsing interrupted.\n");
+      fprintf(stderr, "%sMissing number of transmitted packets, parsing interrupted.\n", WARNING);
       return EXIT_FAILURE;
    }
    flow->packets = atoi(packets);
 
    syn_flag = parse_token(&line, &len);
    if (syn_flag == NULL) {
-      fprintf(stderr, "Warning: Missing SYN flag, parsing interrupted.\n");
+      fprintf(stderr, "%sMissing SYN flag, parsing interrupted.\n", WARNING);
       return EXIT_FAILURE;
    }
    flow->syn_flag = atoi(syn_flag);
@@ -284,7 +300,7 @@ int parse_line(graph_t *graph, flow_t *flow, char *line, int len)
 
    // Delayed flow record, skipping line.
    if (flow->time_first < graph->interval_first) {
-      fprintf(stderr, "Warning: Delayed flow record, parsing interrupted.\n");
+      fprintf(stderr, "%sDelayed flow record, parsing interrupted.\n", WARNING);
       return EXIT_FAILURE;
    }
 
@@ -300,8 +316,7 @@ graph_t *parse_data(params_t *params)
    flow_t flow;
    graph_t *graph;
 
-   j = 0;
-   k = 0;
+   j = k = 0;
    cnt_flows = 0;
    status = 0;
    memset(buffer, 0, BUFFER_SIZE);
@@ -315,7 +330,7 @@ graph_t *parse_data(params_t *params)
 
    // Creating pipe for standard output.
    if (pipe(pipefd) != 0) {
-      fprintf(stderr, "Error: Cannot create a pipe.\n");
+      fprintf(stderr, "%sCannot create a pipe.\n", ERROR);
       goto error;
    }
 
@@ -330,7 +345,7 @@ graph_t *parse_data(params_t *params)
       // Opening file with flows data.
       if (graph->params->file != NULL) {
          if ((execl("/bin/cat", "cat", graph->params->file, NULL)) < 0) {
-            fprintf(stderr, "Error: Cannot open given file.\n");
+            fprintf(stderr, "%sCannot open given file.\n", ERROR);
             goto error;
          }
       }
@@ -343,7 +358,7 @@ graph_t *parse_data(params_t *params)
 
    // Error while forking the process
    else if (pid < 0) {
-      fprintf(stderr, "Error: Cannot fork process.\n");
+      fprintf(stderr, "%sCannot fork process.\n", ERROR);
       goto error;
    }
 
@@ -382,6 +397,7 @@ graph_t *parse_data(params_t *params)
 
                // Interval reached, starting detection.
                if (flow.time_first >= graph->interval_last) {
+                  graph->interval_cnt ++;
                   if (graph->params->progress > 0) {
                      fprintf(stderr, "\n");
                   }
@@ -397,7 +413,7 @@ graph_t *parse_data(params_t *params)
                      graph->window_cnt ++;
                      // Cleaning graph.
                      if (params->flush_cnt == params->flush_iter) {
-                        fprintf(stderr, "Info: Time window reached, flushing whole graph.\n");
+                        fprintf(stderr, "%sTime window reached, flushing whole graph.\n", INFO);
                         params->flush_cnt = 1;
                         free_graph(graph);
                         graph = create_graph(params);
@@ -457,7 +473,7 @@ graph_t *parse_data(params_t *params)
       // Waiting for child.
       close(pipefd[0]);
       if (wait(&status) < 0) {
-         fprintf(stderr, "Error: Child process does not respond.\n");
+         fprintf(stderr, "%sChild process does not respond.\n", ERROR);
          goto error;;
       }
    }
@@ -465,7 +481,7 @@ graph_t *parse_data(params_t *params)
    if (graph->params->progress > 0) {
       fprintf(stderr, "\n");
    }
-   fprintf(stderr,"Info: All data have been successfully processed, processing residues.\n");
+   fprintf(stderr,"%sAll data have been successfully processed, processing residues.\n", INFO);
    graph->interval_idx = (graph->interval_idx + 1) % graph->params->intvl_max;
    parse_detection(graph);
    return graph;
@@ -483,33 +499,31 @@ void parse_detection(graph_t *graph)
    char flag;
    int i, j;
 
-   if ((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) {
-      if (graph->window_cnt != 0) {
-         if (graph->params->level > VERBOSITY) {
-            fprintf(stderr, "Info: Starting SYN flooding detection.\n");
-         }
-         batch_cluster(graph);
+   if (((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) && (graph->interval_cnt > CONVERGENCE)) {
+      if (graph->params->level > VERBOSITY) {
+         fprintf(stderr, "%sStarting SYN flooding detection.\n", INFO);
       }
+      batch_cluster(graph);
    }
 
    if ((graph->params->mode & VER_PORTSCAN) == VER_PORTSCAN) {
       if (graph->params->level > VERBOSITY) {
-         fprintf(stderr, "Info: Starting vertical port scan detection.\n");
+         fprintf(stderr, "%sStarting vertical port scan detection.\n", INFO);
       }
       for (i = 0; i < ALL_PORTS; i ++) {
          if (graph->ports[i].accesses > 0) {
             graph->ports_ver ++;
          }
       }
-      if (graph->ports_ver > VERTICAL_THRESHOLD) {
+      if (graph->ports_ver > graph->params->ver_threshold) {
          graph->attack += VER_PORTSCAN;
-         fprintf(stderr, "Warning: Vertical port scan attack detected!\n");
+         fprintf(stderr, "%sVertical port scan attack detected!\n", WARNING);
       }
    }
 
    if ((graph->params->mode & HOR_PORTSCAN) == HOR_PORTSCAN) {
       if (graph->params->level > VERBOSITY) {
-         fprintf(stderr, "Info: Starting horizontal port scan detection.\n");
+         fprintf(stderr, "%sStarting horizontal port scan detection.\n", INFO);
       }
       qsort(graph->ports, ALL_PORTS, sizeof(port_t), compare_port);
       for (i = 0; i < ALL_PORTS; i ++) {
@@ -527,14 +541,14 @@ void parse_detection(graph_t *graph)
             break;
          }
       }
-      if (graph->ports_hor > HORIZONTAL_THRESHOLD) {
+      if (graph->ports_hor > graph->params->hor_threshold) {
          graph->attack += HOR_PORTSCAN;
-         fprintf(stderr, "Warning: Horizontal port scan attack detected!\n");
+         fprintf(stderr, "%sHorizontal port scan attack detected!\n", WARNING);
       }
    }
 
    print_graph(graph);
    if (graph->params->level > VERBOSITY) {
-      fprintf(stderr, "Info: Detection for given interval finished, results available.\n");
+      fprintf(stderr, "%sDetection for given interval finished, results available.\n", INFO);
    }
 }

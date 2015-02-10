@@ -1,0 +1,12 @@
+2015-01-19 10:47:25 +0100 (Jan Neuzil): ddos_detection: Stable version
+2015-01-12 02:53:04 +0100 (Jan Neuzil): ddos_detection: Backup
+2015-01-05 17:30:30 +0100 (Jan Neuzil): ddos_detection: K-means
+2014-12-08 04:15:09 +0100 (Jan Neuzil): ddos_detection: File splitting
+2014-12-08 01:11:08 +0100 (Jan Neuzil): ddos_detection: Port optimization
+2014-12-07 19:46:13 +0100 (Jan Neuzil): ddos_detection: Stream detection
+2014-12-06 20:56:07 +0100 (Jan Neuzil): ddos_detection: Vertical portscan and gnuplot
+2014-11-24 00:22:44 +0100 (Jan Neuzil): ddos_detection: Stream parsing of data
+2014-11-23 02:19:38 +0100 (Jan Neuzil): ddos_detection: Adding host structures
+2014-11-22 17:38:06 +0100 (Jan Neuzil): ddos_detection: Parameters init
+2014-11-03 01:37:35 +0100 (Jan Neuzil): ddos_detection: Initial commit
+

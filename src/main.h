@@ -78,8 +78,8 @@
 #define PORTS_INIT 8 /*!< Init size of array with network ports. */
 #define HOSTS_INIT 32768 /*!< Init size of array with hosts. */
 
-#define VERTICAL_THRESHOLD 8192 /*!< Threshold for vertical port scan attack. */
-#define HORIZONTAL_THRESHOLD 4096 /*!< Threshold for vertical port scan attack. */
+#define VERTICAL_THRESHOLD 8192 /*!< Default threshold for vertical port scan attack. */
+#define HORIZONTAL_THRESHOLD 4096 /*!< Default threshold for horizontal port scan attack. */
 #define KNOWN_PORTS 16 /*< Number of well known ports. */
 #define ALL_PORTS 65536 /*!< Maximum number of network ports. */
 
@@ -91,6 +91,7 @@
 #define FLUSH_ITER 0 /*!< Default number of iteration after the graph is flushed. */
 #define ARRAY_MIN 32 /*!< Minimum number of intervals. */
 #define INTERVAL 60 /*!< Default observation interval of SYN packets in seconds. */
+#define CONVERGENCE 5 /*!< Default number of intervals to start SYN flooding detection. */
 #define PORT_WINDOW 300 /*!< Default observation port scan window in seconds before flushing ports. */
 #define TIME_WINDOW 3600 /*!< Default observation time window defined in seconds. */
 
@@ -101,6 +102,9 @@
 #define OBSERVATIONS 1 /*!< Default minumum number of observations in the cluster. */
 #define square(x) ((x) * (x)) /*!< Square function used in k-means algorithm. */
 
+#define INFO "\033[1mInfo: \033[0m" /*!< Text prefix for information level announcement. */
+#define WARNING "\033[1;31mWarning:  \033[0m" /*!< Text prefix for warning level announcement. */
+#define ERROR "\033[1;31mError:  \033[0m" /*!< Text prefix for error level announcement. */
 #define DELIMITER ' ' /*!< Default delimiter for parsing CSV files. */
 #define FILE_FORMAT "%H-%M-%S" /*!< Default file name in time format. */
 #define TIME_FORMAT "%a %b %d %Y %H:%M:%S" /*!< Default human readable time format. */
@@ -209,6 +213,8 @@ typedef struct host {
    uint8_t cluster; /*!< Assigned cluster to the host. */
    uint8_t previous; /*!< Assigned cluster in the previous iteration. */
    uint32_t accesses; /*!< Number of times the given address has been accessed. */
+   double peak; /*!< Maximum number of SYN packets in a interval sent to the host. */
+   double mean; /*!< Average number of SYN packets sent to the host without the peak number. */
    double *distances; /*!< Distances to the centroids. */
    intvl_t *intervals; /*!< Array of SYN packets number in the given interval. */
    extra_t *extra; /*!< Pointer to extra information about the host. */
@@ -231,6 +237,8 @@ typedef struct params {
    int intvl_max; /*!< Maximum size of SYN packets array. */
    int iter_max; /*!< Maximum number of intervals before flushing all ports. */
    int window_sum; /*!< Number of reached windows during the runtime. */
+   int ver_threshold; /*!< Threshold for vertical port scan attack. */
+   int hor_threshold; /*!< Threshold for horizontal port scan attack. */
    char *file; /*!< CSV file to be processed by the algorithm. */
    char *name; /*!< File name in time format. */
 } params_t;
@@ -262,7 +270,8 @@ typedef struct graph {
    uint8_t host_level; /*!< Flag to identify host examination level. */
    uint8_t cluster_idx; /*!< Index of cluster with detected hosts. */
    uint16_t interval_idx; /*!< Index number of given interval. */
-   uint16_t interval_cnt; /*!< Number of reached intervals. */
+   uint64_t interval_cnt; /*!< Number of reached intervals. */
+   uint16_t interval_max; /*!< Maximum size of SYN packets array. */
    uint16_t ports_ver; /*!< Number of different ports used in the interval. */
    uint32_t ports_hor; /*!< Maximum number of accesses on a single port in the interval. */
    port_t ports[ALL_PORTS]; /*!< Array of all ports and number of accesses in the given interval. */

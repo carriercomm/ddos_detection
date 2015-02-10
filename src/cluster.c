@@ -9,6 +9,7 @@
  */
 
 #include "cluster.h"
+#include "main.h"
 
 cluster_t **create_cluster(params_t *params)
 {
@@ -17,18 +18,18 @@ cluster_t **create_cluster(params_t *params)
 
    clusters = (cluster_t **) calloc(params->clusters, sizeof(cluster_t *));
    if (clusters == NULL) {
-      fprintf(stderr, "Error: Not enough memory for cluster structures.\n");
+      fprintf(stderr, "%sNot enough memory for cluster structures.\n", ERROR);
       goto error;
    }
    for (i = 0; i < params->clusters; i ++) {
       clusters[i] = (cluster_t *) calloc(1, sizeof(cluster_t));
       if (clusters[i] == NULL) {
-         fprintf(stderr, "Error: Not enough memory for cluster structure.\n");
+         fprintf(stderr, "%sNot enough memory for cluster structure.\n", ERROR);
          goto error;
       }
       clusters[i]->centroid = (intvl_t *) calloc(params->intvl_max, sizeof(intvl_t));
       if (clusters[i]->centroid == NULL) {
-         fprintf(stderr, "Error: Not enough memory for centroid structure.\n");
+         fprintf(stderr, "%sNot enough memory for centroid structure.\n", ERROR);
          goto error;
       }
    }
@@ -70,7 +71,7 @@ int init_cluster(graph_t *graph)
       graph->clusters[j]->hosts_cnt = 0;
       for (i = idx; i < graph->hosts_cnt; i ++) {
          if (graph->hosts[i]->stat != 0) {
-            for (m = 0; m < graph->params->intvl_max; m ++) {
+            for (m = 0; m < graph->interval_max; m ++) {
                graph->clusters[j]->centroid[m].syn_packets = graph->hosts[j]->intervals[m].syn_packets;
             }
             idx = i + 1;
@@ -91,7 +92,7 @@ void distance_cluster(graph_t *graph)
       if (graph->hosts[i]->stat != 0) {
          for (j = 0; j < graph->params->clusters; j ++) {
             graph->hosts[i]->distances[j] = 0.0;
-            for (m = 0; m < graph->params->intvl_max; m ++) {
+            for (m = 0; m < graph->interval_max; m ++) {
                x = graph->hosts[i]->intervals[m].syn_packets - graph->clusters[j]->centroid[m].syn_packets;
                graph->hosts[i]->distances[j] += square(x);
             }
@@ -142,14 +143,14 @@ void centroid_cluster(graph_t *graph)
    int i, j, m;
 
    for (j = 0; j < graph->params->clusters; j ++) {
-      for (m = 0; m < graph->params->intvl_max; m ++) {
+      for (m = 0; m < graph->interval_max; m ++) {
          graph->clusters[j]->centroid[m].syn_packets = 0.0;
       }
    }
 
    for (i = 0; i < graph->hosts_cnt; i ++) {
       if (graph->hosts[i]->stat != 0) {
-         for (m = 0; m < graph->params->intvl_max; m ++) {
+         for (m = 0; m < graph->interval_max; m ++) {
             graph->clusters[graph->hosts[i]->cluster]->centroid[m].syn_packets += graph->hosts[i]->intervals[m].syn_packets;
          }
       }
@@ -157,10 +158,10 @@ void centroid_cluster(graph_t *graph)
 
    for (j = 0; j < graph->params->clusters; j ++) {
       if (graph->clusters[j]->hosts_cnt == 0) {
-         fprintf(stderr, "Warning: Empty cluster %d.\n", j + 1);
+         fprintf(stderr, "%sEmpty cluster %d.\n", WARNING, j + 1);
          continue;
       }
-      for (m = 0; m < graph->params->intvl_max; m ++) {
+      for (m = 0; m < graph->interval_max; m ++) {
          graph->clusters[j]->centroid[m].syn_packets /= (double) graph->clusters[j]->hosts_cnt;
       }
    }
@@ -185,7 +186,7 @@ int change_cluster(graph_t *graph)
 
 void adjust_cluster(graph_t *graph)
 {
-   int i, j, k, m, v;
+   int i, idx, j, k, m, v;
    double dev, max, mean, x;
    uint64_t min;
 
@@ -193,7 +194,7 @@ void adjust_cluster(graph_t *graph)
    graph->cluster_idx = 0;
    for (j = 1; j < graph->params->clusters; j ++) {
       if (graph->clusters[j]->hosts_cnt == 0) {
-         fprintf(stderr, "Warning: Empty cluster found after the convergence.\n");
+         fprintf(stderr, "%sEmpty cluster found after the convergence.\n", WARNING);
          return;
       }
       if (graph->clusters[j]->hosts_cnt < min) {
@@ -209,30 +210,38 @@ void adjust_cluster(graph_t *graph)
       k = 1;
    }
 
-   v = graph->params->intvl_max - ARRAY_EXTRA;
+   if (graph->window_cnt == 0) {
+      idx = 0;
+      v = graph->interval_idx;
+   } else {
+      idx = graph->interval_idx + ARRAY_EXTRA;
+      v = graph->params->intvl_max - ARRAY_EXTRA;
+   }
    for (i = 0; i < graph->hosts_cnt; i ++) {
       if (graph->hosts[i]->stat != 0 && graph->hosts[i]->cluster == graph->cluster_idx) {
          // Calculating mean and maximum of SYN flooding packets.
          mean = 0.0;
          max = 0.0;
          for (m = 0; m < v; m ++) {
-            x = graph->hosts[i]->intervals[(graph->interval_idx+ARRAY_EXTRA+m)%graph->params->intvl_max].syn_packets;
+            x = graph->hosts[i]->intervals[(idx+m)%graph->params->intvl_max].syn_packets;
             mean += x;
             if (x > max) {
                max = x;
             }
          }
+         graph->hosts[i]->peak = max;
+         graph->hosts[i]->mean = (mean - max) / (v - 1);
          mean /= v;
          dev = 0.0;
          // Calculating standard deviation of SYN flooding packets.
          for (m = 0; m < v; m ++) {
-            x = graph->hosts[i]->intervals[(graph->interval_idx+ARRAY_EXTRA+m)%graph->params->intvl_max].syn_packets - mean;
+            x = graph->hosts[i]->intervals[(idx+m)%graph->params->intvl_max].syn_packets - mean;
             dev += square(x);
          }
          dev = sqrt(dev / (v - 1));
-
+         
          // Determining attack or not.
-         if (dev < (4 * mean) || max < SYN_THRESHOLD) {
+         if (dev < (2 * mean) || max < SYN_THRESHOLD) {
             graph->hosts[i]->cluster = k;
             graph->clusters[graph->cluster_idx]->hosts_cnt --;
             graph->clusters[k]->hosts_cnt ++;
@@ -243,14 +252,22 @@ void adjust_cluster(graph_t *graph)
    // Setting SYN flooding attack flag.
    if (graph->clusters[graph->cluster_idx]->hosts_cnt > 0) {
       graph->attack += SYN_FLOODING;
+      fprintf(stderr, "%sSYN flooding attack detected!\n", WARNING);
    }
 }
 
 void batch_cluster(graph_t *graph)
 {
+   // Determining the dimension of the data.
+   if (graph->window_cnt == 0) {
+      graph->interval_max = graph->interval_idx;
+   } else {
+      graph->interval_max = graph->params->intvl_max;
+   }
+
    // Initializing centroids of the cluster with first values in the graph.
    if ((init_cluster(graph)) != graph->params->clusters) {
-      fprintf(stderr, "Warning: Not enough data to start SYN flooding detection.\n");
+      fprintf(stderr, "%sNot enough data to start SYN flooding detection.\n", WARNING);
       return;
    }
    // Calculating the Euclidean distance to each centroid.
@@ -286,14 +303,19 @@ void online_cluster(graph_t *graph)
 
    // Number of observations
    n = graph->hosts_cnt;
-   // Number of values.
-   v = graph->params->intvl_max;
    // Number of clusters.
    k = graph->params->clusters;
 
+   // Determining the dimension of the data.
+   if (graph->window_cnt == 0) {
+      v = graph->interval_idx;
+   } else {
+      v = graph->params->intvl_max;
+   }
+
    // Initializing centroids of the cluster with first values in the graph.
    if ((init_cluster(graph)) != graph->params->clusters) {
-      fprintf(stderr, "Warning: Not enough data to start SYN flooding detection.\n");
+      fprintf(stderr, "%sNot enough data to start SYN flooding detection.\n", WARNING);
       return;
    }
 

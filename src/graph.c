@@ -16,13 +16,14 @@ graph_t *create_graph(params_t *params)
 
    graph = (graph_t *) calloc(1, sizeof(graph_t));
    if (graph == NULL) {
-      fprintf(stderr, "Error: Not enough memory for graph structure.\n");
+      fprintf(stderr, "%sNot enough memory for graph structure.\n", ERROR);
       return NULL;
    }
 
    // Initializing structure.
    graph->host_level = LEVEL_INFO;
-   graph->interval_idx = graph->interval_cnt = 0;
+   graph->interval_idx = 0;
+   graph->interval_cnt = 0;
    graph->window_cnt = 0;
    graph->ports_ver = 0;
    graph->ports_hor = 0;
@@ -37,14 +38,14 @@ graph_t *create_graph(params_t *params)
 
    graph->root = (node_t *) calloc(1, sizeof(node_t));
    if (graph->root == NULL) {
-      fprintf(stderr, "Error: Not enough memory for node structure.\n");
+      fprintf(stderr, "%sNot enough memory for node structure.\n", ERROR);
       goto error;
    }
    graph->root->left = NULL;
    graph->root->right = NULL;
    graph->hosts = (host_t **) calloc(graph->hosts_max, sizeof(host_t *));
    if (graph->hosts == NULL) {
-      fprintf(stderr, "Error: Not enough memory for hosts array.\n");
+      fprintf(stderr, "%sNot enough memory for hosts array.\n", ERROR);
       goto error;
    }
 
@@ -100,17 +101,12 @@ void reset_graph(graph_t *graph)
 
    if (((graph->params->mode & VER_PORTSCAN) == VER_PORTSCAN) || ((graph->params->mode & HOR_PORTSCAN) == HOR_PORTSCAN)) {
       reset_port(graph->ports);
-      graph->interval_cnt ++;
       if (graph->host_level > LEVEL_INFO) {
-         if (graph->interval_cnt == graph->params->iter_max) {
-            fprintf(stderr, "Info: Flushing all used ports of given host after %d intervals.\n", graph->params->iter_max);
-            graph->interval_cnt = 0;
-            for (i = 0; i < graph->hosts_cnt; i ++) {
-               for (j = 0; j < graph->hosts[i]->extra->ports_cnt; j ++) {
-                  graph->hosts[i]->extra->ports[j]->accesses = 0;
-               }
-               graph->hosts[i]->stat = 0;
+         for (i = 0; i < graph->hosts_cnt; i ++) {
+            for (j = 0; j < graph->hosts[i]->extra->ports_cnt; j ++) {
+               graph->hosts[i]->extra->ports[j]->accesses = 0;
             }
+            graph->hosts[i]->stat = 0;
          }
       }
    }
@@ -135,28 +131,28 @@ void print_graph(graph_t *graph)
    // Setting file name based on a minute.
    time = localtime(&(graph->interval_first));
    if (time == NULL) {
-      fprintf(stderr, "Warning: Cannot convert UNIX timestamp, output omitted.\n");
+      fprintf(stderr, "%sCannot convert UNIX timestamp, output omitted.\n", WARNING);
       return;
    }
    if (strftime(buffer, BUFFER_TMP, FILE_FORMAT, time) == 0) {
-      fprintf(stderr, "Warning: Cannot convert UNIX timestamp, output omitted.\n");
+      fprintf(stderr, "%sCannot convert UNIX timestamp, output omitted.\n", WARNING);
       return;
    }
    graph->params->name = buffer;
    snprintf(name, BUFFER_TMP, "res/%s.log", buffer);
    if (strftime(date, BUFFER_TMP, TIME_FORMAT, time) == 0) {
-      fprintf(stderr, "Warning: Cannot convert UNIX timestamp, output omitted.\n");
+      fprintf(stderr, "%sCannot convert UNIX timestamp, output omitted.\n", WARNING);
       return;
    }
 
    f = fopen(name, "w");
    if (f == NULL) {
-      fprintf(stderr, "Warning: Cannot create empty file in given directory, output omitted.\n");
+      fprintf(stderr, "%sCannot create empty file in given directory, output omitted.\n", WARNING);
       return;
    }
 
    if (graph->params->level > VERBOSE_BASIC) {
-      fprintf(stderr, "Warning: Check for disk space, very large output may follow.\n");
+      fprintf(stderr, "%sCheck for disk space, very large output may follow.\n", WARNING);
    }
 
    for (i = 0; i < graph->hosts_cnt; i ++) {
@@ -165,6 +161,7 @@ void print_graph(graph_t *graph)
       }
    }
 
+   fprintf(f, "###################################################\n");
    fprintf(f, "Time:                      %*s\n", p, date);
    fprintf(f, "Number of active hosts:            %*d\n", p, sum);
 
@@ -175,7 +172,7 @@ void print_graph(graph_t *graph)
       fprintf(f, "Maximum port accesses:             %*u\n", p, graph->ports_hor);
    }
    if ((graph->params->mode & SYN_FLOODING) == SYN_FLOODING) {
-      if (graph->window_cnt != 0) {
+      if (graph->interval_cnt > CONVERGENCE) {
          fprintf(f, "Number of clusters:                %*d\n", p, graph->params->clusters);
          for (i = 0; i < graph->params->clusters; i ++) {
             fprintf(f, "* Hosts in cluster %d:              %*lu\n", i + 1, p, graph->clusters[i]->hosts_cnt);
@@ -184,40 +181,43 @@ void print_graph(graph_t *graph)
       }
    }
 
-   if (graph->params->level >= VERBOSE_BASIC) {
-      qsort(graph->hosts, graph->hosts_cnt, sizeof(host_t *), compare_host);
-      // Creating plot of possible DDoS attack victims.
-      for (i = 0; i < graph->hosts_cnt; i ++) {
-         if ((graph->attack & SYN_FLOODING) == SYN_FLOODING) {
-            if (graph->window_cnt != 0) {
-               if ((graph->hosts[i]->stat != 0) && (graph->hosts[i]->cluster == graph->cluster_idx)) {
-                  inet_ntop(AF_INET, &(graph->hosts[i]->ip), ip, INET_ADDRSTRLEN);
-                  fprintf(f, "* Destination IP address:          %*s\n", p, ip);
-                  print_host(graph, i, SYN_FLOODING);
-               }
-            }
-         }
-         if ((graph->attack & VER_PORTSCAN) == VER_PORTSCAN) {
-            if ((graph->hosts[i]->accesses > 0) && (graph->hosts[i]->level == LEVEL_TRACE)) {
-               print_host(graph, i, ALL_ATTACKS);
-            }
-         }
-      }
+   
+    // Creating plot of possible DDoS attack victims.
+    for (i = 0; i < graph->hosts_cnt; i ++) {
+       if ((graph->attack & SYN_FLOODING) == SYN_FLOODING) {
+          if ((graph->hosts[i]->stat != 0) && (graph->hosts[i]->cluster == graph->cluster_idx)) {
+             inet_ntop(AF_INET, &(graph->hosts[i]->ip), ip, INET_ADDRSTRLEN);
+             fprintf(f, "* Destination IP address:          %*s\n"
+                        "* SYN packets average:             %*.0lf\n"
+                        "* SYN packets peak:                %*.0lf\n",
+                     p, ip, p, graph->hosts[i]->mean, p, graph->hosts[i]->peak);
+             if (graph->params->level >= VERBOSE_BASIC) {
+                print_host(graph, i, SYN_FLOODING);
+             }
+          }
+       }
+       if ((graph->attack & VER_PORTSCAN) == VER_PORTSCAN) {
+          if ((graph->params->level >= VERBOSE_BASIC) && (graph->hosts[i]->level == LEVEL_TRACE)) {
+             print_host(graph, i, ALL_ATTACKS);
+          }
+       }
+    }
 
-      if ((graph->attack & VER_PORTSCAN) == VER_PORTSCAN) {
-         print_host(graph, 0, VER_PORTSCAN);
-      }
+    if (((graph->attack & VER_PORTSCAN) == VER_PORTSCAN) && (graph->params->level >= VERBOSE_BASIC)) {
+       print_host(graph, 0, VER_PORTSCAN);
+    }
 
-      if ((graph->attack & HOR_PORTSCAN) == HOR_PORTSCAN) {
-         print_host(graph, 0, HOR_PORTSCAN);
-         fprintf(f, "\nHorizontal port scan attack brief:\n");
-         for (i = 0; i < TOP_ACCESSED; i ++) {
-            fprintf(f, "* Destination port:                %*d\n"
-                       "* Times accessed:                  %*u\n",
-                    p, graph->ports[i].port_num, p, graph->ports[i].accesses);
-         }
-      }
-   }
+    if ((graph->attack & HOR_PORTSCAN) == HOR_PORTSCAN) {
+       fprintf(f, "\nHorizontal port scan attack brief:\n");
+       for (i = 0; i < TOP_ACCESSED; i ++) {
+          fprintf(f, "* Destination port:                %*d\n"
+                     "* Times accessed:                  %*u\n",
+                  p, graph->ports[i].port_num, p, graph->ports[i].accesses);
+       }
+       if (graph->params->level >= VERBOSE_BASIC) {
+          print_host(graph, 0, HOR_PORTSCAN);
+       }
+    }
 
    // Printing information about hosts.
    if (graph->params->level >= VERBOSE_ADVANCED) {
@@ -266,6 +266,6 @@ void print_graph(graph_t *graph)
          }
       }
    }
-
+   fprintf(f, "###################################################\n");
    fclose(f);
 }
